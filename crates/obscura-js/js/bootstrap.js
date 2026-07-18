@@ -3170,6 +3170,9 @@ globalThis.navigator = {
   getGamepads() { return []; },
   sendBeacon() { return true; },
   javaEnabled() { return false; },
+  registerProtocolHandler() {},
+  unregisterProtocolHandler() {},
+  vibrate() { return false; },
   geolocation: {
     getCurrentPosition(success, error) {
       const coords = {
@@ -6573,6 +6576,62 @@ class _Canvas2D {
   getContextAttributes() { return { alpha: true, desynchronized: false, colorSpace: "srgb", willReadFrequently: false }; }
 }
 
+// WebGL context as a REAL WebGLRenderingContext instance: methods and GL
+// constants live on the prototype ([native code]-masked), the context is
+// Object.create(WebGLRenderingContext.prototype) with no own data props (canvas
+// via WeakMap), so `gl instanceof WebGLRenderingContext`,
+// `Object.getPrototypeOf(gl).constructor.name === "WebGLRenderingContext"`, and
+// `WebGLRenderingContext.prototype.getParameter.toString()` all match Chrome.
+// readPixels output is deterministic (seeded) so the WebGL fingerprint is stable
+// and coherent within a session.
+if (typeof globalThis.WebGL2RenderingContext !== 'function') {
+  globalThis.WebGL2RenderingContext = class WebGL2RenderingContext extends WebGLRenderingContext {};
+  _markNative(globalThis.WebGL2RenderingContext);
+}
+const _glCanvas = new WeakMap();
+(function() {
+  var P = WebGLRenderingContext.prototype;
+  function m(name, fn) {
+    _markNative(fn);
+    if (typeof _markNativeAs === 'function') _markNativeAs(fn, 'function ' + name + '() { [native code] }');
+    Object.defineProperty(P, name, { value: fn, writable: true, enumerable: false, configurable: true });
+  }
+  var K = { MAX_VIEWPORT_DIMS:0x0D33, MAX_TEXTURE_SIZE:0x0D33, MAX_RENDERBUFFER_SIZE:0x84E8,
+    MAX_TEXTURE_MAX_ANISOTROPY_EXT:0x84EA, MAX_DRAW_BUFFERS_WEBGL:0x8824, VERTEX_SHADER:0x8B31,
+    FRAGMENT_SHADER:0x8B30, LINK_STATUS:0x8B82, ARRAY_BUFFER:0x8892, STATIC_DRAW:0x88E4, FLOAT:0x1406,
+    TRIANGLES:0x0004, COLOR_BUFFER_BIT:0x4000, DEPTH_BUFFER_BIT:0x100, TEXTURE_2D:0x0DE1,
+    RGBA:0x1908, UNSIGNED_BYTE:0x1401 };
+  Object.keys(K).forEach(function(k) { if (!(k in P)) Object.defineProperty(P, k, { value: K[k], writable: false, enumerable: false, configurable: false }); });
+  Object.defineProperty(P, 'canvas', { get: _markNative(function() { return _glCanvas.get(this) || null; }), set: undefined, enumerable: true, configurable: true });
+  m('getContextAttributes', function getContextAttributes() { return { alpha:true, antialias:true, depth:true, failIfMajorPerformanceCaveat:false, powerPreference:"default", premultipliedAlpha:true, preserveDrawingBuffer:false, stencil:true, desynchronized:false }; });
+  m('getExtension', function getExtension(name) { if (name === 'WEBGL_debug_renderer_info') return { UNMASKED_VENDOR_WEBGL:0x9245, UNMASKED_RENDERER_WEBGL:0x9246 }; return null; });
+  m('getParameter', function getParameter(pname) {
+    if (pname === 0x9245) return _fp('gpuVendor');
+    if (pname === 0x9246) return _fp('gpu');
+    if (pname === 0x1F01) return 'WebKit WebGL';
+    if (pname === 0x1F00) return 'WebKit';
+    if (pname === 0x1F02) return 'OpenGL ES 3.0 (ANGLE)';
+    if (pname === 0x8B8C) return 'WebGL GLSL ES 3.00 (ANGLE)';
+    if (pname === 0x0D33) return new Int32Array([8192, 8192]);
+    if (pname === 0x8A2A) return [8192, 8192];
+    return 0;
+  });
+  m('getSupportedExtensions', function getSupportedExtensions() { return ['WEBGL_debug_renderer_info','EXT_texture_filter_anisotropic','WEBGL_compressed_texture_s3tc','WEBGL_lose_context']; });
+  m('getShaderPrecisionFormat', function getShaderPrecisionFormat() { return { rangeMin:127, rangeMax:127, precision:23 }; });
+  m('createBuffer', function createBuffer() { return {}; }); m('createShader', function createShader() { return {}; }); m('createProgram', function createProgram() { return {}; });
+  m('shaderSource', function shaderSource() {}); m('compileShader', function compileShader() {}); m('attachShader', function attachShader() {}); m('linkProgram', function linkProgram() {});
+  m('getProgramParameter', function getProgramParameter() { return true; }); m('useProgram', function useProgram() {}); m('deleteShader', function deleteShader() {});
+  m('bindBuffer', function bindBuffer() {}); m('bufferData', function bufferData() {}); m('enableVertexAttribArray', function enableVertexAttribArray() {}); m('vertexAttribPointer', function vertexAttribPointer() {});
+  m('drawArrays', function drawArrays() {}); m('drawElements', function drawElements() {}); m('viewport', function viewport() {}); m('clear', function clear() {}); m('clearColor', function clearColor() {});
+  m('enable', function enable() {}); m('disable', function disable() {}); m('blendFunc', function blendFunc() {}); m('depthFunc', function depthFunc() {});
+  m('getUniformLocation', function getUniformLocation() { return {}; }); m('getAttribLocation', function getAttribLocation() { return 0; });
+  m('uniform1f', function uniform1f() {}); m('uniform1i', function uniform1i() {}); m('uniform2f', function uniform2f() {}); m('uniformMatrix4fv', function uniformMatrix4fv() {});
+  m('createTexture', function createTexture() { return {}; }); m('bindTexture', function bindTexture() {}); m('texImage2D', function texImage2D() {}); m('texParameteri', function texParameteri() {});
+  m('activeTexture', function activeTexture() {}); m('pixelStorei', function pixelStorei() {}); m('generateMipmap', function generateMipmap() {});
+  m('createFramebuffer', function createFramebuffer() { return {}; }); m('bindFramebuffer', function bindFramebuffer() {}); m('framebufferTexture2D', function framebufferTexture2D() {});
+  m('readPixels', function readPixels(x, y, w, h, f, t, d) { if (d) { for (var i = 0; i < d.length; i++) d[i] = Math.floor(_fpRand(700 + (i & 1023)) * 256) & 0xff; } });
+})();
+
 Element.prototype.getContext = function getContext(type) {
   if (type === '2d') {
     if (!this._ctx) {
@@ -6581,51 +6640,13 @@ Element.prototype.getContext = function getContext(type) {
     return this._ctx;
   }
   if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
-    return {
-      canvas: this,
-      MAX_VIEWPORT_DIMS: 0x0D33,
-      MAX_TEXTURE_SIZE: 0x0D33,
-      MAX_RENDERBUFFER_SIZE: 0x84E8,
-      MAX_TEXTURE_MAX_ANISOTROPY_EXT: 0x84EA,
-      MAX_DRAW_BUFFERS_WEBGL: 0x8824,
-      getContextAttributes() { return { alpha: true, antialias: true, depth: true, failIfMajorPerformanceCaveat: false, powerPreference: "default", premultipliedAlpha: true, preserveDrawingBuffer: false, stencil: true, desynchronized: false }; },
-      uniform2f() {},
-      getExtension(name) {
-        if (name === 'WEBGL_debug_renderer_info') return { UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246 };
-        return null;
-      },
-      getParameter(pname) {
-        if (pname === 0x9245) return _fp('gpuVendor');
-        if (pname === 0x9246) return _fp('gpu');
-        if (pname === 0x1F01) return 'WebKit WebGL';  // GL_RENDERER
-        if (pname === 0x1F00) return 'WebKit';          // GL_VENDOR
-        if (pname === 0x1F02) return 'OpenGL ES 3.0 (ANGLE)'; // GL_VERSION
-        if (pname === 0x8B8C) return 'WebGL GLSL ES 3.00 (ANGLE)'; // GL_SHADING_LANGUAGE_VERSION
-        if (pname === undefined) return [0, 0];
-        // Some properties like MAX_VIEWPORT_DIMS return arrays
-        if (pname === 0x0D33) return [8192, 8192];
-        if (pname === 0x8A2A) return [8192, 8192];
-        return 0;
-      },
-      getSupportedExtensions() { return ['WEBGL_debug_renderer_info','EXT_texture_filter_anisotropic','WEBGL_compressed_texture_s3tc','WEBGL_lose_context']; },
-      getShaderPrecisionFormat() { return { rangeMin: 127, rangeMax: 127, precision: 23 }; },
-      createBuffer() { return {}; }, createShader() { return {}; }, createProgram() { return {}; },
-      shaderSource() {}, compileShader() {}, attachShader() {}, linkProgram() {},
-      getProgramParameter() { return true; }, useProgram() {}, deleteShader() {},
-      bindBuffer() {}, bufferData() {}, enableVertexAttribArray() {}, vertexAttribPointer() {},
-      drawArrays() {}, drawElements() {}, viewport() {}, clear() {}, clearColor() {},
-      enable() {}, disable() {}, blendFunc() {}, depthFunc() {},
-      getUniformLocation() { return {}; }, getAttribLocation() { return 0; },
-      uniform1f() {}, uniform1i() {}, uniformMatrix4fv() {},
-      createTexture() { return {}; }, bindTexture() {}, texImage2D() {}, texParameteri() {},
-      activeTexture() {}, pixelStorei() {}, generateMipmap() {},
-      createFramebuffer() { return {}; }, bindFramebuffer() {}, framebufferTexture2D() {},
-      readPixels(x,y,w,h,f,t,d) { if(d) for(let i=0;i<d.length;i++) d[i]=Math.floor(Math.random()*256); },
-      VERTEX_SHADER: 0x8B31, FRAGMENT_SHADER: 0x8B30, LINK_STATUS: 0x8B82,
-      ARRAY_BUFFER: 0x8892, STATIC_DRAW: 0x88E4, FLOAT: 0x1406,
-      TRIANGLES: 0x0004, COLOR_BUFFER_BIT: 0x4000, DEPTH_BUFFER_BIT: 0x100,
-      TEXTURE_2D: 0x0DE1, RGBA: 0x1908, UNSIGNED_BYTE: 0x1401,
-    };
+    if (!this._glctx) {
+      var proto = (type === 'webgl2') ? WebGL2RenderingContext.prototype : WebGLRenderingContext.prototype;
+      var ctx = Object.create(proto);
+      _glCanvas.set(ctx, this);
+      this._glctx = ctx;
+    }
+    return this._glctx;
   }
   return null;
 };
@@ -8110,6 +8131,8 @@ globalThis.__obscura_init = function() {
         if (!d) return;
         if ('value' in d) {
           if (typeof d.value === 'function') {
+            _markNative(d.value);
+            if (typeof _markNativeAs === 'function') _markNativeAs(d.value, 'function ' + key + '() { [native code] }');
             Object.defineProperty(proto, key, { value: d.value, writable: true, enumerable: true, configurable: true });
           } else {
             var val = d.value;
