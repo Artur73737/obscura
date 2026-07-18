@@ -11,6 +11,11 @@
 
 ---
 
+Extra per TLS/headers perfetti
+
+curl-impersonate-cli → per richieste HTTP pure con fingerprint Chrome byte-exact (utile per fetch senza browser completo)
+wafrift-fingerprint o spider_fingerprint → per generare header + script JS da iniettare
+
 ## Indice
 
 1. [Navigator Properties](#1-navigator-properties)
