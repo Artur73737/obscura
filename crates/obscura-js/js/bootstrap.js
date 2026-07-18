@@ -3212,7 +3212,11 @@ globalThis.navigator = {
 // so hasOwnProperty/getOwnPropertyDescriptor on the instance match Chrome.
 // Getters read __obscura_* lazily (snapshot vs per-page) and are _markNative'd.
 (function() {
-  var _navProto = Object.create(Navigator.prototype);
+  // Spoofed getters go directly on Navigator.prototype (not an intermediate
+  // proto) so both `Object.getPrototypeOf(navigator) === Navigator.prototype`
+  // and `Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')`
+  // match Chrome (§15). An intermediate proto broke both checks.
+  var _navProto = Navigator.prototype;
 
   function defGetter(key, fn) {
     _markNative(fn);
