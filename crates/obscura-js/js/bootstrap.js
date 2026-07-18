@@ -1,22 +1,5 @@
 "use strict";
 
-/*next_changes
-bootstrap/
-├── core.js                  // preHideInternals, hide reflection, toString override, errori
-├── timers.js                // setTimeout, setInterval, RAF, queueMicrotask
-├── console.js               // console shim
-├── dom-core.js              // Node, Element, Document, Text, Comment, Attr, ecc.
-├── css.js                   // CSSStyleDeclaration, DOMTokenList
-├── forms.js                 // input, validity, selection, setCustomValidity
-├── canvas.js                // CanvasRenderingContext2D, ImageData, ecc.
-├── media.js                 // Audio, Video, WebAudio, MediaStream, ecc.
-├── webapi.js                // WebSocket, EventSource, FileReader, IndexedDB, Fetch shims
-├── fingerprint.js           // _fpRand, _getFp, gpu, canvas, audio, screen, hardware
-├── navigator.js             // navigator + UserActivation, BarProp, Permissions, USB, ecc.
-├── secure-context.js        // gating per [SecureContext]
-├── init.js                  // __obscura_init che orchestra tutto
-└── index.js                 // importa tutto nell'ordine corretto
-*/
 
 // Pre-declare all internal globals as non-enumerable so they are invisible
 // to Object.keys(window) / for-in enumeration. Must run before any var
