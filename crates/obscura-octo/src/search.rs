@@ -55,7 +55,10 @@ pub async fn run_search(
                     followed: false,
                 };
                 if cfg.depth != Depth::Serp {
-                    scrape_into(&mut result, req, &cfg, fetcher).await;
+                    // Send the SERP as Referer: a human opens each result by
+                    // clicking it from the results page, so a real Chrome sends
+                    // the search page as the referrer.
+                    scrape_into(&mut result, req, &cfg, fetcher, base.as_str()).await;
                 }
                 emit(sink, &result);
                 results.push(result);
@@ -258,6 +261,7 @@ async fn scrape_into(
     req: &SearchRequest,
     cfg: &ResolvedConfig,
     fetcher: &dyn Fetcher,
+    referer: &str,
 ) {
     let page = match fetcher
         .fetch(
@@ -266,7 +270,7 @@ async fn scrape_into(
                 timeout_secs: cfg.timeout,
                 wait_secs: cfg.wait,
                 eval: req.eval.as_deref(),
-                referer: None,
+                referer: Some(referer),
             },
         )
         .await
@@ -333,7 +337,9 @@ async fn follow_internal_links(
                         timeout_secs: cfg.timeout,
                         wait_secs: cfg.wait,
                         eval: req.eval.as_deref(),
-                        referer: None,
+                        // A real click on an internal link sends the page it was
+                        // found on as the referrer.
+                        referer: Some(&seed_url),
                     },
                 )
                 .await

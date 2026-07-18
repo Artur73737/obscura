@@ -1003,3 +1003,1093 @@ La differenza tra "approssimare" e "replicare letteralmente" è nei dettagli:
 - Bidirectional references in PluginArray
 - Error stack format corretto
 - Timing properties
+
+---
+
+## 21. Gamepad API (`navigator.getGamepads()`)
+
+### Property descriptor
+
+`navigator.getGamepads()` esiste su `Navigator.prototype`:
+```
+{ writable: true, enumerable: false, configurable: true }
+```
+
+### `getGamepads()`
+
+- **`toString()`:** `"function getGamepads() { [native code] }"`
+- **Return:** `Array` (non `GamepadList`). Lunghezza fissa **4** in Chrome (indici 0-3). Elementi sono `Gamepad` o `null`.
+- **Nessun gamepad connesso:** `[null, null, null, null]`
+- **Richiede user gesture** — prima di un button press, restituisce tutti `null`
+
+### `Gamepad` interface (NON esiste `Gamepad` constructor)
+
+Tutte le proprietà sono accessor su `Gamepad.prototype`: `{ get: [native code], set: undefined, enumerable: true, configurable: true }`
+
+| Property | Type | Chrome-specific |
+|---|---|---|
+| `id` | string | formato: `"<name> (STANDARD GAMEPAD Vendor: <vid> Product: <pid>)"` |
+| `index` | long | 0-3 |
+| `connected` | boolean | `false` dopo disconnessione |
+| `timestamp` | DOMHighResTimeStamp | last update in ms |
+| `mapping` | GamepadMappingType | `"standard"` o `""` |
+| `axes` | FrozenArray\<double\> | standard = 4 |
+| `buttons` | FrozenArray\<GamepadButton\> | standard = 17 |
+| `vibrationActuator` | GamepadHapticActuator? | `null` se no hardware |
+| `hapticActuators` | FrozenArray | Chrome extension |
+
+### `GamepadButton`
+
+Tutte enumerabili: `pressed` (boolean), `touched` (boolean), `value` (double 0-1).
+
+### `GamepadEvent`
+
+Constructor esposto: `new GamepadEvent(type, { gamepad })`. Event handlers su `Window`: `ongamepadconnected`, `ongamepaddisconnected`.
+
+---
+
+## 22. Credentials Container API (`navigator.credentials`)
+
+### `navigator.credentials` — property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: function credentials() { [native code] }, set: undefined, enumerable: true, configurable: true }
+```
+
+### `CredentialsContainer` methods
+
+Tutte su `CredentialsContainer.prototype`: `{ writable: true, enumerable: true, configurable: true }`, `toString()` → `[native code]`
+
+| Method | Returns | Parameters |
+|---|---|---|
+| `get()` | `Promise<Credential\|null>` | `CredentialRequestOptions` |
+| `store()` | `Promise<Credential>` | `credential: Credential` |
+| `create()` | `Promise<Credential\|null>` | `CredentialCreationOptions` |
+| `preventSilentAccess()` | `Promise<undefined>` | — |
+
+### Credential types
+
+| Constructor | Exposed? | Notes |
+|---|---|---|
+| `PasswordCredential` | **Yes** | `new PasswordCredential(data)` |
+| `FederatedCredential` | **Yes** | `new FederatedCredential(data)` |
+| `IdentityCredential` | **No** | creato via `get({ identity })` |
+| `PublicKeyCredential` | **Yes** | WebAuthn |
+
+### FedCM (Chrome 136+)
+
+- `navigator.credentials.get({ identity: { providers: [{ configURL, clientId }] } })` → `IdentityCredential`
+- Multi-IdP: `providers` è array
+- Auto-reauthn: max ogni 10 minuti
+- `preventSilentAccess()` disabilita auto-reauthn
+
+---
+
+## 23. Origin Private File System (`navigator.storage.getDirectory()`)
+
+### Property descriptor
+
+Su `StorageManager.prototype`:
+```
+{ value: function getDirectory() { [native code] }, writable: true, enumerable: true, configurable: true }
+```
+
+### `StorageManager.getDirectory()`
+
+- Returns `Promise<FileSystemDirectoryHandle>` (name=`""`, kind=`"directory"`)
+- **Sempre disponibile** in secure context (HTTPS/localhost)
+- **Nessun permesso** richiesto — `queryPermission()` → `"granted"`
+- Funziona anche in Incognito (storage effimero)
+
+### `FileSystemDirectoryHandle`
+
+Su `FileSystemDirectoryHandle.prototype`:
+`{ writable: true, enumerable: true, configurable: true }` per tutti i metodi.
+
+| Method | Returns |
+|---|---|
+| `getFileHandle(name, { create })` | `Promise<FileSystemFileHandle>` |
+| `getDirectoryHandle(name, { create })` | `Promise<FileSystemDirectoryHandle>` |
+| `removeEntry(name, { recursive })` | `Promise<undefined>` |
+| `resolve(descendant)` | `Promise<[string, ...]\|null>` |
+
+Proprietà ereditate (readonly accessors): `name`, `kind`, `queryPermission`, `requestPermission`, `isSameEntry`.
+
+### `FileSystemFileHandle`
+
+| Method | Returns | Scope |
+|---|---|---|
+| `getFile()` | `Promise<File>` | Window + Worker |
+| `createWritable({ mode })` | `Promise<FileSystemWritableFileStream>` | Window + Worker |
+| `createSyncAccessHandle({ mode })` | `Promise<FileSystemSyncAccessHandle>` | **DedicatedWorker only** |
+
+### `FileSystemSyncAccessHandle` (worker-only)
+
+Metodi sincroni: `read(buffer, {at})`, `write(buffer, {at})`, `truncate(size)`, `getSize()`, `flush()`, `close()`.
+
+### Storage Buckets (`navigator.storageBuckets`)
+
+**Non** `navigator.storage.buckets()`. È una proprietà separata:
+
+```
+navigator.storageBuckets → StorageBucketManager
+  ├─ open(name, { persisted, durability }) → Promise<StorageBucket>
+  │    ├─ name, persist(), persisted(), estimate()
+  │    ├─ setExpires(), expires()
+  │    ├─ getDirectory() → per-bucket OPFS root
+  │    ├─ indexedDB (scoped)
+  │    └─ caches (scoped)
+  ├─ keys() → Promise<[string, ...]>
+  └─ delete(name) → Promise<undefined>
+```
+
+Chrome 122+. Secure context required.
+
+---
+
+## 24. Keyboard API (`navigator.keyboard`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: function get keyboard() { [native code] }, set: undefined, enumerable: true, configurable: true }
+```
+
+### Methods su `Keyboard.prototype`
+
+| Method | Descriptor | `toString()` |
+|---|---|---|
+| `getLayoutMap()` | `{ writable: true, enumerable: true, configurable: true }` | `function getLayoutMap() { [native code] }` |
+| `lock(keyCodes?)` | `{ writable: true, enumerable: true, configurable: true }` | `function lock() { [native code] }` |
+| `unlock()` | `{ writable: true, enumerable: true, configurable: true }` | `function unlock() { [native code] }` |
+
+### `getLayoutMap()` → `KeyboardLayoutMap`
+
+Read-only maplike: `get(key)`, `has(key)`, `size`, `entries()`, `keys()`, `values()`, `forEach()`.
+Chrome-specific: i valori dipendono dal layout OS (QWERTY, AZERTY, QWERTZ, Dvorak...).
+
+### `lock()` specifiche
+
+- Richiede fullscreen JS-initiated + transient activation + secure context
+- Nessun argomento = locka tutti i tasti
+- Escape: long-press Escape per 2 secondi
+- Chrome 130-131: provato permission prompt, **ritirato**
+
+---
+
+## 25. Scheduling API (`navigator.scheduling`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+Tipo: `Scheduling` object. Chrome M87+.
+
+### `scheduling.isInputPending()`
+
+```
+{ writable: true, enumerable: false, configurable: true }
+toString() → "function isInputPending() { [native code] }"
+```
+
+- **Chrome-only** API — presenza identifica Chrome
+- `isInputPending({ includeContinuous: false })` → boolean
+- Discrete events: click, keydown, keyup, mousedown, mouseup, touchstart...
+- Continuous (solo con `includeContinuous: true`): mousemove, wheel, touchmove...
+
+### `scheduler.currentTaskSignal` (Chrome 136+)
+
+Su `Scheduler.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+
+- Returns `TaskSignal | null` (il signal del task corrente via `scheduler.postTask()`)
+
+### `TaskSignal` e `TaskController`
+
+Chrome M94+. `TaskSignal` estende `AbortSignal`. `TaskPriorityChangeEvent` con `previousPriority`.
+
+---
+
+## 26. Web Locks API (`navigator.locks`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+Tipo: `LockManager`. Secure context required. **Disponibile anche in Worker.**
+
+### `LockManager` methods
+
+Su `LockManager.prototype`: `{ writable: true, enumerable: true, configurable: true }`, `toString()` → `[native code]`
+
+| Method | Returns |
+|---|---|
+| `request(name, callback)` | `Promise<any>` |
+| `request(name, options, callback)` | `Promise<any>` |
+| `query()` | `Promise<{ held: LockInfo[], pending: LockInfo[] }>` |
+
+### `LockInfo`: `{ name: string, mode: "exclusive"|"shared", clientId: string }`
+
+### `Lock`: `{ name: string, mode: string }` (entrambi readonly, `{ get: [native code], set: undefined, enumerable: true, configurable: true }`)
+
+---
+
+## 27. Web Serial API (`navigator.serial`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+**Chrome-only** (non in Firefox/Safari). Secure context required. `[SameObject]`.
+
+### `Serial` methods
+
+| Method | Returns | Notes |
+|---|---|---|
+| `requestPort({ filters })` | `Promise<SerialPort>` | Richiede user gesture |
+| `getPorts()` | `Promise<[SerialPort]>` | Solo già autorizzati |
+| `onconnect` | EventHandler | type `"connect"` |
+| `ondisconnect` | EventHandler | type `"disconnect"` |
+
+### `SerialPort`
+
+| Method/Property | Description |
+|---|---|
+| `open({ baudRate, ... })` | dataBits (7/8), stopBits (1/2), parity, flowControl |
+| `close()` | — |
+| `getInfo()` | `{ usbVendorId, usbProductId, bluetoothServiceClassId }` |
+| `readable` | `ReadableStream<Uint8Array> | null` |
+| `writable` | `WritableStream<Uint8Array> | null` |
+| `connected` | boolean, readonly |
+
+---
+
+## 28. WebUSB API (`navigator.usb`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+**Chrome-only** (Chrome 61+). Secure context req. `[SameObject]`.
+
+### `USB` methods
+
+| Method | Descriptor |
+|---|---|
+| `requestDevice({ filters })` | `{ writable: true, enumerable: true, configurable: true }` — richiede user gesture |
+| `getDevices()` | stessa descrizione — `` return solo già autorizzati |
+| `onconnect` / `ondisconnect` | EventHandler (USBConnectionEvent) |
+
+### `USBDevice` properties (tutte readonly, `{ get: [native code], enumerable: true, configurable: true }`)
+
+`usbVersionMajor`, `usbVersionMinor`, `usbVersionSubminor`, `deviceClass`, `deviceSubclass`, `deviceProtocol`, `vendorId`, `productId`, `deviceVersionMajor/Minor/Subminor`, `manufacturerName`, `productName`, `serialNumber`, `configuration`, `configurations`, `opened`.
+
+---
+
+## 29. WebHID API (`navigator.hid`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: false, configurable: false }
+```
+**Chrome-only** (Chrome 89+). Secure context req. `[SameObject]`.
+
+### `HID` methods
+
+| Method | Returns | Notes |
+|---|---|---|
+| `requestDevice({ filters })` | `Promise<[HIDDevice]>` | Solo Window, user gesture |
+| `getDevices()` | `Promise<[HIDDevice]>` | Worker accessibile |
+| `onconnect` / `ondisconnect` | EventHandler | `HIDConnectionEvent` |
+
+### `HIDDevice` properties
+
+`opened`, `vendorId`, `productId`, `productName`, `manufacturerName`, `serialNumber`, `collections` (sequence di `HIDCollectionInfo` con `usagePage`, `usage`, `type`, `children`, `inputReports`, `outputReports`, `featureReports`).
+
+---
+
+## 30. Web Bluetooth API (`navigator.bluetooth`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+**Chrome-only** (Chrome 56+). Secure context req. `[SameObject]`. `writable: false`.
+
+### `Bluetooth` methods
+
+| Method | Returns | Notes |
+|---|---|---|
+| `getAvailability()` | `Promise<boolean>` | Bluetooth adapter presente? |
+| `requestDevice({ filters })` | `Promise<BluetoothDevice>` | User gesture req |
+| `onavailabilitychanged` | EventHandler | `BluetoothAvailabilityEvent` |
+| `referringDevice` | `BluetoothDevice | null` | — |
+
+### `BluetoothDevice` properties
+
+`id` (opaque, non MAC), `name`, `gatt`, `uuids` (FrozenArray), `connected`, `watchingAdvertisements`. Metodi: `watchAdvertisements()`, `forget()`.
+
+---
+
+## 31. Screen Wake Lock API (`navigator.wakeLock`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: function get wakeLock() { [native code] }, set: undefined, enumerable: true, configurable: true }
+```
+Secure context req. `[SameObject]`.
+
+### `wakeLock.request("screen")`
+
+```
+{ writable: true, enumerable: false, configurable: true }
+toString() → "function request() { [native code] }"
+```
+
+- Returns `Promise<WakeLockSentinel>`
+- **NON richiede user gesture** in Chrome (attualmente)
+- Reject: `NotAllowedError` se document hidden o policy blocked
+
+### `WakeLockSentinel`
+
+| Property | Descriptor |
+|---|---|
+| `released` | `{ get: [native code], set: undefined, enumerable: true, configurable: true }` |
+| `type` | `{ get: [native code], set: undefined, enumerable: true, configurable: true }` — sempre `"screen"` |
+| `release()` | `{ writable: true, enumerable: false, configurable: true }` → `Promise<undefined>` |
+
+---
+
+## 32. Async Clipboard API (`navigator.clipboard`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: false, configurable: true }
+```
+**Enumerabile: false** (unico tra le API navigator).
+
+### Metodi
+
+Tutti `{ writable: true, enumerable: false, configurable: true }`, `toString()` → `[native code]`.
+
+| Method | Returns | Permesso richiesto |
+|---|---|---|
+| `read()` | `Promise<ClipboardItem[]>` | `clipboard-read` + user gesture + HTTPS |
+| `readText()` | `Promise<string>` | `clipboard-read` + user gesture + HTTPS |
+| `write(items)` | `Promise<undefined>` | `clipboard-write` OR user gesture |
+| `writeText(text)` | `Promise<undefined>` | `clipboard-write` OR user gesture |
+
+### `ClipboardItem`
+
+Constructor: `new ClipboardItem({ 'text/plain': blob })`. Properties: `types` (readonly), `presentationStyle` (readonly). Method: `getType(mime)`. Static: `ClipboardItem.supports(mime)`.
+
+**Secure context required** — su HTTP `navigator.clipboard === undefined`.
+
+---
+
+## 33. User Activation API (`navigator.userActivation`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+`writable: false` (readonly). `[SameObject]`. Chrome 72+.
+
+### `UserActivation` properties
+
+| Property | Type | Description |
+|---|---|---|
+| `hasBeenActive` | boolean | Sticky — `true` se mai ricevuta user activation |
+| `isActive` | boolean | Transient — `true` se entro ~5s dall'ultimo gesture |
+
+Entrambi: `{ get: [native code], set: undefined, enumerable: true, configurable: true }`.
+
+Chrome transient activation window: **~5 secondi**. Non disponibile in Worker (`[Exposed=Window]`).
+
+---
+
+## 34. VirtualKeyboard API (`navigator.virtualKeyboard`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+Secure context req. `[SameObject]`. **Disponibile anche su desktop** (non solo mobile) in Chrome 136+.
+
+### Properties
+
+| Property | Descriptor | Notes |
+|---|---|---|
+| `boundingRect` | `{ get, set: undefined, enumerable: true, configurable: true }` | DOMRect, 0 quando nascosto |
+| `overlaysContent` | `{ get, set, enumerable: true, configurable: true }` | Read/write boolean |
+| `ongeometrychange` | `{ get, set, enumerable: true, configurable: true }` | EventHandler |
+| `show()` | `{ writable: true, enumerable: true, configurable: true }` | Richiede sticky activation |
+| `hide()` | `{ writable: true, enumerable: true, configurable: true }` | Stessa |
+
+---
+
+## 35. Window Controls Overlay API (`navigator.windowControlsOverlay`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+`[SameObject]`. Sempre esposta su desktop Chrome anche fuori PWA.
+
+### `WindowControlsOverlay`
+
+| Property/Method | Descriptor |
+|---|---|
+| `visible` | `{ get, set: undefined, enumerable: true, configurable: true }` — boolean |
+| `getTitlebarAreaRect()` | `{ writable: true, enumerable: true, configurable: true }` → DOMRect |
+| `ongeometrychange` | `{ get, set, enumerable: true, configurable: true }` |
+
+- **Fuori PWA:** `visible=false`, `getTitlebarAreaRect()` → `{x:0, y:0, w:0, h:0}`
+- **geometrychange** event: `WindowControlsOverlayGeometryChangeEvent` → `titlebarAreaRect` (DOMRect), `visible` (boolean)
+
+---
+
+## 36. Media Session API (`navigator.mediaSession`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+Sempre presente in Chrome (senza user gesture/media). Chrome 57+.
+
+### Properties
+
+| Property | Descriptor | Notes |
+|---|---|---|
+| `metadata` | `{ get, set, enumerable: true, configurable: true }` | `MediaMetadata | null` |
+| `playbackState` | `{ get, set, enumerable: true, configurable: true }` | `"none"` / `"paused"` / `"playing"` |
+| `setActionHandler()` | `{ writable: true, enumerable: false, configurable: true }` | — |
+
+### `MediaMetadata`
+
+Constructor: `new MediaMetadata({ title, artist, album, artwork })`. Tutte le properties sono read/write: `title`, `artist`, `album`, `artwork`.
+
+### Action types
+
+`"play"`, `"pause"`, `"seekbackward"`, `"seekforward"`, `"previoustrack"`, `"nexttrack"`, `"stop"`, `"seekto"`, `"skipad"`, `"togglecamera"`, `"togglemicrophone"`, `"hangup"`, `"previousslide"`, `"nextslide"`, `"enterpictureinpicture"`.
+
+---
+
+## 37. WebXR Device API (`navigator.xr`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+Secure context req. Chrome 79+. **Chrome-only su desktop** (assente in Firefox/Safari desktop).
+
+### `XRSystem` methods
+
+| Method | Returns | Notes |
+|---|---|---|
+| `isSessionSupported(mode)` | `Promise<boolean>` | `"inline"`, `"immersive-vr"`, `"immersive-ar"` |
+| `requestSession(mode, options?)` | `Promise<XRSession>` | Richiede user gesture |
+| `ondevicechange` | EventHandler | — |
+
+### Desktop behavior (senza VR headset)
+
+- `isSessionSupported("inline")` → **true**
+- `isSessionSupported("immersive-vr")` → **false** (richiede hardware)
+- `requestSession("inline")` → funziona su qualsiasi desktop Chrome
+- Feature policy: `xr-spatial-tracking`
+
+---
+
+## 38. MediaCapabilities.encodingInfo()
+
+### Property descriptor
+
+Su `MediaCapabilities.prototype`:
+```
+{ writable: true, enumerable: false, configurable: true }
+toString() → "function encodingInfo() { [native code] }"
+```
+
+### Configuration
+
+`type`: `"record"` | `"webrtc"` | `"transmission"`. Campo video/audio con `contentType`, `width`, `height`, `bitrate`, `framerate`.
+
+Returns `Promise<{ supported: boolean, smooth: boolean, powerEfficient: boolean, configuration: object }>`.
+
+### Differenze da `decodingInfo()`
+
+- `type` values diversi (`"record"` vs `"file"`)
+- No encrypted media support
+- Subset di codec: encoding support ≤ decoding support
+- AV1 encoding: solo Profile 0 8-bit è diffuso
+- H.264 Baseline encoding: ~99.7%
+
+Tutti i campi di `MediaCapabilitiesInfo`: `{ value: bool, writable: true, enumerable: true, configurable: true }`.
+
+---
+
+## 39. Ink API (`navigator.ink`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+**Chrome-only** (Chrome 94+). Secure context req. `[SameObject]`.
+
+### `Ink` methods
+
+`requestPresenter({ presentationArea })` → `Promise<DelegatedInkTrailPresenter>`
+```
+{ writable: true, enumerable: false, configurable: true }
+toString() → "function requestPresenter() { [native code] }"
+```
+
+### `DelegatedInkTrailPresenter`
+
+| Property | Descriptor |
+|---|---|
+| `presentationArea` | `{ get, set: undefined, enumerable: true, configurable: true }` |
+| `updateInkTrailStartPoint(event, { color, diameter })` | `{ writable: true, enumerable: false, configurable: true }` |
+
+- `expectedImprovement` **rimosso** in Chrome 130+
+- Disponibile anche su desktop (non solo pen devices)
+
+---
+
+## 40. Navigator Lesser-Known APIs
+
+### `navigator.login` (FedCM Login Status)
+
+```
+{ get: [native code], set: undefined, enumerable: false, configurable: true }
+```
+
+- **Unico metodo**: `setStatus("logged-in"|"logged-out")` → `undefined`
+- FedCM identity requests vanno via `navigator.credentials.get({ identity })`
+- `request()`, `cancel()`, `logout()`: rimossi da `navigator.login`
+
+### `navigator.managed` (Managed Configuration API)
+
+```
+{ get: [native code], set: undefined, enumerable: false, configurable: true }
+```
+Chrome-only. `getManagedConfiguration([keys])` → `Promise<object>`. Solo su device enterprise-managed.
+
+### `navigator.devicePosture`
+
+```
+{ get: [native code], set: undefined, enumerable: false, configurable: true }
+```
+Experimental (flag). `type`: `"continuous"` | `"folded"`. `onchange` event.
+
+### `navigator.registerProtocolHandler(scheme, url)`
+
+```
+{ writable: true, enumerable: false, configurable: true }
+toString() → "function registerProtocolHandler() { [native code] }"
+```
+Allowed schemes: `mailto`, `bitcoin`, `magnet`, `tel`, `web+*`, ecc. Handler URL must be HTTPS + same-origin.
+
+### `navigator.sendBeacon(url, data)`
+
+```
+{ writable: true, enumerable: false, configurable: true }
+toString() → "function sendBeacon() { [native code] }"
+```
+Returns `boolean`. Payload limit: 64 KiB. Sempre HTTP POST.
+
+---
+
+## 41. Trusted Types API & Security APIs
+
+### `window.trustedTypes` (TrustedTypePolicyFactory)
+
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+Chrome 83+. Cross-origin: `{ value: undefined, writable: false, enumerable: false, configurable: true }`.
+
+| Method | Returns |
+|---|---|
+| `createPolicy(name, options)` | `TrustedTypePolicy` |
+| `isHTML(value)` | `boolean` |
+| `isScript(value)` | `boolean` |
+| `isScriptURL(value)` | `boolean` |
+| `getAttributeType(tag, attr)` | `string\|null` |
+| `getPropertyType(tag, prop)` | `string\|null` |
+
+Properties: `emptyHTML` (TrustedHTML), `emptyScript` (TrustedScript), `defaultPolicy` (TrustedTypePolicy | null).
+
+### `TrustedHTML`, `TrustedScript`, `TrustedScriptURL`
+
+**Nessun constructor.** Solo `toString()` (stringifier) e `toJSON()`. Costruttori esposti su `window`: `window.TrustedHTML`, ecc.
+
+### `window.crossOriginIsolated`
+
+```
+{ writable: true, enumerable: true, configurable: true }
+```
+Chrome 87+. `true` se COOP+COEP attivi.
+
+### `window.isSecureContext`
+
+```
+{ writable: true, enumerable: true, configurable: true }
+```
+Cross-origin: `{ value: undefined, writable: false, enumerable: false, configurable: true }`.
+
+### `document.featurePolicy` / `document.permissionsPolicy`
+
+Entrambi `{ get: [native code], set: undefined, enumerable: true, configurable: true }`.
+
+Methods: `allowsFeature(feature)`, `allowsFeature(feature, origin)`, `allowedFeatures()`, `features()`, `getAllowlistForFeature(feature)`.
+**Fingerprint:** `features()` restituisce la lista completa delle policy-controlled features supportate — cambia per versione Chrome.
+
+---
+
+## 42. Advanced Performance APIs
+
+### `performance.measureUserAgentSpecificMemory()`
+
+```
+{ writable: false, enumerable: true, configurable: true }
+toString() → "function measureUserAgentSpecificMemory() { [native code] }"
+```
+Chrome 89+. Richiede `crossOriginIsolated === true`.
+
+Returns `Promise<MemoryMeasurement>`: `{ bytes, breakdown: [{ bytes, types: [], attribution: [{ url, scope, container }] }] }`.
+
+### `PerformanceObserver.supportedEntryTypes`
+
+Chrome 136+ (main thread): `["element", "event", "first-input", "largest-contentful-paint", "layout-shift", "long-animation-frame", "longtask", "mark", "measure", "navigation", "paint", "resource", "visibility-state"]`. Worker: solo `["mark", "measure", "resource"]`.
+
+### `PerformanceResourceTiming` (Chrome 136+)
+
+Additional properties rispetto a spec standard:
+- `deliveryType`: `""` (network) | `"cache"` | `"navigational-prefetch"`
+- `contentType`: MIME (es. `"text/javascript"`) o `""` se opaco
+- `contentEncoding`: `"gzip"`, `"br"`, ecc.
+- `responseStatus`: HTTP status code (0 per opaco)
+- `renderBlockingStatus`: `"blocking"` | `"non-blocking"`
+
+Tutte le proprietà sono `{ get: [native code], set: undefined, enumerable: true, configurable: true }`.
+
+### `PerformanceEventTiming` (first-input)
+
+`processingStart`, `processingEnd`, `cancelable`, `target`, `interactionId`, `targetSelector`.
+
+### `LayoutShift`
+
+`value` (0-1), `hadRecentInput`, `lastInputTime`, `sources` (FrozenArray di `LayoutShiftAttribution` con `node`, `previousRect`, `currentRect`).
+
+### `LargestContentfulPaint`
+
+`renderTime`, `loadTime`, `size`, `id`, `url`, `element`.
+
+### `TaskAttributionTiming`
+
+`containerType` (`"iframe"`|`"embed"`|`"object"`|`"window"`), `containerSrc`, `containerId`, `containerName`.
+
+### `VisibilityStateEntry` (Chrome-specific)
+
+`name`: `"visible"` | `"hidden"`, `startTime`: timestamp della transizione.
+
+---
+
+## 43. Service Worker API (`navigator.serviceWorker`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+Tipo: `ServiceWorkerContainer`. Solo HTTPS. `[SameObject]`.
+
+### `ServiceWorkerContainer` properties
+
+| Property | Descriptor | Notes |
+|---|---|---|
+| `controller` | `{ get, set: undefined, enumerable: true, configurable: true }` | `ServiceWorker | null` |
+| `ready` | `{ get, set: undefined, enumerable: true, configurable: true }` | `Promise<ServiceWorkerRegistration>` (sempre risolta) |
+
+### Methods
+
+Tutte `{ writable: true, enumerable: true, configurable: true }`, `toString()` → `[native code]`:
+
+| Method | Returns |
+|---|---|
+| `register(scriptURL, options?)` | `Promise<ServiceWorkerRegistration>` |
+| `getRegistration(clientURL?)` | `Promise<ServiceWorkerRegistration | undefined>` |
+| `getRegistrations()` | `Promise<sequence<ServiceWorkerRegistration>>` |
+| `startMessages()` | `undefined` |
+
+### Event handlers
+
+`oncontrollerchange`, `onmessage`, `onmessageerror`.
+
+### `ServiceWorkerRegistration`
+
+| Property | Type |
+|---|---|
+| `scope` | `USVString` |
+| `active` | `ServiceWorker | null` |
+| `installing` | `ServiceWorker | null` |
+| `waiting` | `ServiceWorker | null` |
+| `navigationPreload` | `NavigationPreloadManager` |
+| `pushManager` | `PushManager` |
+| `sync` | `SyncManager` |
+| `periodicSync` | `PeriodicSyncManager` |
+| `updateViaCache` | `"imports" | "all" | "none"` |
+
+---
+
+## 44. Geolocation API (`navigator.geolocation`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+Tipo: `Geolocation`. `[SameObject]`.
+
+### Methods
+
+Tutte `{ writable: true, enumerable: true, configurable: true }`, `toString()` → `[native code]`:
+
+| Method | Returns |
+|---|---|
+| `getCurrentPosition(success, error?, options?)` | `undefined` (async, callback-based) |
+| `watchPosition(success, error?, options?)` | `long` (watch ID) |
+| `clearWatch(id)` | `undefined` |
+
+### Options dictionary
+
+```
+{ enableHighAccuracy: false, timeout: Infinity, maximumAge: 0 }
+```
+
+### Senza permesso
+
+- `getCurrentPosition()` chiama `error` callback con `PositionError.code === 1` (PERMISSION_DENIED)
+- `Permissions.query({ name: 'geolocation' })` → `{ state: 'denied' | 'prompt' | 'granted' }`
+
+---
+
+## 45. MediaDevices API (`navigator.mediaDevices`)
+
+### Property descriptor
+
+Su `Navigator.prototype`:
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+Tipo: `MediaDevices`. `[SameObject]`. Secure context req.
+
+### Methods
+
+Tutte `{ writable: true, enumerable: true, configurable: true }`, `toString()` → `[native code]`:
+
+| Method | Returns | Notes |
+|---|---|---|
+| `enumerateDevices()` | `Promise<sequence<MediaDeviceInfo>>` | Senza permesso: label/deviceId vuoti |
+| `getUserMedia(constraints)` | `Promise<MediaStream>` | Richiede permesso + user gesture |
+| `getDisplayMedia(constraints)` | `Promise<MediaStream>` | Richiede permesso + user gesture (screen capture) |
+| `getSupportedConstraints()` | `MediaTrackSupportedConstraints` | Chrome-specific set |
+
+### `MediaDeviceInfo` (senza permesso)
+
+```javascript
+[
+  { deviceId: "", kind: "audioinput", label: "", groupId: "" },
+  { deviceId: "", kind: "audiooutput", label: "", groupId: "" },
+  { deviceId: "", kind: "videoinput", label: "", groupId: "" }
+]
+```
+
+### Event handlers
+
+`ondevicechange` su `MediaDevices`.
+
+---
+
+## 46. StorageManager.persist() / persisted()
+
+### Property descriptors
+
+Su `StorageManager.prototype`:
+```
+{ writable: true, enumerable: true, configurable: true }
+toString() → [native code]
+```
+
+| Method | Returns |
+|---|---|
+| `persist()` | `Promise<boolean>` — true se storage diventa persisted |
+| `persisted()` | `Promise<boolean>` — true se storage è già persisted |
+
+### Chrome behavior
+
+- `persisted()` → default `false` per la maggior parte delle origini
+- `persist()` → Chrome può concedere `true` automaticamente se `"site engages with user"` o l'origine ha `"high site engagement score"`
+- **Incognito:** `persisted()` → `false` sempre, `persist()` → `false`
+- **Bookmarked/manifest PWA:** più probabile `persist()` → `true`
+
+---
+
+## 47. Navigator misc methods
+
+### `navigator.javaEnabled()`
+
+```
+{ writable: true, enumerable: true, configurable: true }
+toString() → "function javaEnabled() { [native code] }"
+```
+
+- **Sempre restituisce `false`** in Chrome 136+ (Java plugin non supportato da Chrome 45+)
+- Ma il metodo **esiste ancora** su `Navigator.prototype`
+- Firefox: restituisce `false` (Java plugin rimane in Firefox)
+- Safari: non esiste (`undefined`)
+- La sua presenza (oltre al valore) è un segnale fingerprint per Chrome/Firefox vs Safari
+
+### `navigator.getBattery()`
+
+```
+{ writable: true, enumerable: true, configurable: true }
+toString() → "function getBattery() { [native code] }"
+```
+
+- Returns `Promise<BatteryManager>`
+- **Deprecato** in Chrome 136+ ma **ancora presente**
+- `BatteryManager` properties: `charging`, `chargingTime` (0 se charging), `dischargingTime` (Infinity se discharging), `level` (0-1)
+- Eventi: `onchargingchange`, `onchargingtimechange`, `ondischargingtimechange`, `onlevelchange`
+- Chrome **riduce precisione**: `chargingTime` arrotondato, `level` arrotondato a multipli di 0.01
+- In Incognito: `level: 1.0`, `charging: true`, `chargingTime: 0`, `dischargingTime: Infinity`
+- `BatteryManager` extende `EventTarget`. Tutte le properties sono `{ get, set: undefined, enumerable: true, configurable: true }`.
+
+### `navigator.share()`
+
+```
+{ writable: true, enumerable: true, configurable: true }
+toString() → "function share() { [native code] }"
+```
+
+- Returns `Promise<undefined>`. Richiede user gesture (transient activation).
+- `navigator.share({ title, text, url })` → apre native share sheet
+- **Desktop Chrome** 136+: disponibile, ma solo se installato come app/launch handler o tramite flag
+
+### `navigator.canShare(data)`
+
+```
+{ writable: true, enumerable: true, configurable: true }
+toString() → "function canShare() { [native code] }"
+```
+
+- Returns `boolean`. Verifica se `share()` probabilmente funzionerà.
+- Non richiede user gesture.
+- Chrome-specific: `canShare({ files })` verifica file type support.
+
+---
+
+## 48. Document.cookie property descriptor
+
+### Property descriptor su `Document.prototype`
+
+```
+{ get: [native code], set: [native code], enumerable: true, configurable: true }
+```
+
+- **Getter e setter entrambi nativi** (non data property)
+- `Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')` → accessor descriptor con get e set
+- In **cross-origin iframe**: `document.cookie` è accessor che restituisce stringa vuota (no errore)
+- In **HTTPS con `SameSite=None`**: il getter restituisce tutti i cookie del dominio
+- In **http://**: i cookie con `SameSite=None; Secure` sono invisibili
+
+### Chrome-specific behavior
+
+- `document.cookie = "name=value"` crea cookie session senza `SameSite` specificato → Chrome 136+ lo tratta come `SameSite=Lax`
+- Non è possibile leggere cookie `HttpOnly` via JS (il getter li esclude)
+- `Object.getOwnPropertyDescriptor(Document.prototype, 'cookie').get.toString()` → `"function get cookie() { [native code] }"`
+- `Object.getOwnPropertyDescriptor(Document.prototype, 'cookie').set.toString()` → `"function set cookie() { [native code] }"`
+
+---
+
+## 49. Performance misc properties
+
+### `performance.timeOrigin`
+
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+
+- Returns `DOMHighResTimeStamp` — epoch ms del navigation start
+- Chrome 136+: alta precisione (non arrotondata)
+- Costante per tutta la vita della pagina
+- `performance.timeOrigin + performance.now()` ≈ `Date.now()` (salvo skew orologio)
+
+### `performance.supportedEntryTypes` (static, alias PerformanceObserver)
+
+Già coperto in §42 ma il **property descriptor statico** è:
+```
+Object.getOwnPropertyDescriptor(PerformanceObserver, 'supportedEntryTypes')
+→ { get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+
+### `performance.toJSON()`
+
+```
+{ writable: true, enumerable: true, configurable: true }
+```
+Returns `{ timeOrigin, timing, navigation, memory }`.
+
+---
+
+## 50. Window misc fingerprint surfaces
+
+### `window.originAgentCluster`
+
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+
+- Chrome 88+. Tipo: `boolean`.
+- `true` se l'agente è origin-keyed (con `Origin-Agent-Cluster: ?1` header)
+- `false` di default
+
+### `window.credentialless`
+
+```
+{ get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+
+- Chrome 117+. Tipo: `boolean`.
+- `true` se l'iframe è stato creato con `credentialless` attribute
+- Solo su iframe, non su top-level window
+
+### `window.opener`
+
+- Property descriptor: `{ get: [native code], set: [native code], enumerable: true, configurable: true }` (accessor con get e set)
+- In popup aperto via `window.open()`: riferimento alla window padre
+- Con `noopener`: `null`
+
+### `window.locationbar`, `window.menubar`, `window.personalbar`, `window.scrollbars`, `window.statusbar`, `window.toolbar`
+
+Tutte `BarProp` objects su `Window.prototype`.
+
+```
+Object.getOwnPropertyDescriptor(Window.prototype, 'locationbar')
+→ { get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+
+Ogni `BarProp` ha una sola property: `visible` → boolean
+```
+BarProp.prototype.visible → { get: [native code], set: undefined, enumerable: true, configurable: true }
+```
+
+In headless Chrome 136+:
+- `locationbar.visible` → `false` (URL bar non visibile)
+- `menubar.visible` → `false`
+- `personalbar.visible` → `false`
+- `scrollbars.visible` → `true` (sempre true anche in headless)
+- `statusbar.visible` → `false`
+- `toolbar.visible` → `false`
+
+---
+
+## 51. Navigator prototype — checklist finale
+
+Tutte le proprietà su `Navigator.prototype` in Chrome 136+ (lista completa, aggiornata):
+
+```
+bluetooth, canShare, clipboard, connection, cookieEnabled,
+credentials, deviceMemory, doNotTrack (getter deprecated),
+getBattery, getGamepads, geolocation, gpu, hardwareConcurrency,
+hid, ink, javaEnabled, keyboard, language, languages, locks,
+login, managed, maxTouchPoints, mediaCapabilities, mediaDevices,
+mediaSession, mimeTypes, onLine, pdfViewerEnabled, permissions,
+platform, plugins, product, registerProtocolHandler, scheduling,
+sendBeacon, serial, serviceWorker, share, storage, storageBuckets,
+userActivation, userAgent, userAgentData, usb, vendor,
+virtualKeyboard, wakeLock, webdriver, windowControlsOverlay, xr
+```
+
+**Assenti in Chrome (presenti in altri browser):**
+```
+buildID (Firefox), oscpu (Firefox), globalPrivacyControl (Firefox/Brave),
+standalone (Safari iOS), contacts (Safari), securitypolicy (Firefox)
+```
+
+**Deprecati/rimossi:**
+```
+vendorSub (Chrome 136+: ancora presente ma vuoto), productSub (ancora presente),
+taintEnabled (rimosso da Chrome), preference (rimosso)
+```
+
+---
+
+## 52. Window.prototype — property descriptors checklist
+
+Tutte le proprietà fingerprint-critical su `Window.prototype` in Chrome 136+:
+
+| Property | Descriptor type | Notes |
+|---|---|---|
+| `onblur, onfocus, onresize, onscroll, onload, onunload` | `{ get, set }` accessor | EventHandler IDL |
+| `onbeforeunload, onhashchange, onpopstate` | `{ get, set }` accessor | EventHandler IDL |
+| `ondevicemotion, ondeviceorientation` | `{ get, set }` accessor | Solo mobile |
+| `onlanguagechange` | `{ get, set }` accessor | EventHandler |
+| `onrejectionhandled, onunhandledrejection` | `{ get, set }` accessor | Promise events |
+| `onsubmit, onreset` | `{ get, set }` accessor | Form events |
+| `ontouchstart, ontouchmove, ontouchend, ontouchcancel` | `{ get, set }` accessor | Chrome ha **sempre** questi anche su desktop (diverso da Safari/Firefox) |
+| `ongotpointercapture, onlostpointercapture` | `{ get, set }` accessor | — |
+| `onsecuritypolicyviolation` | `{ get, set }` accessor | CSP violations |
+| `print()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+| `alert(), confirm(), prompt()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+| `open()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+| `postMessage()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+| `requestAnimationFrame()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+| `cancelAnimationFrame()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+| `requestIdleCallback()` | `{ writable: true, enumerable: true, configurable: true }` | Chrome-only (non Safari) |
+| `cancelIdleCallback()` | `{ writable: true, enumerable: true, configurable: true }` | Chrome-only |
+| `queueMicrotask()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+| `structuredClone()` | `{ writable: true, enumerable: true, configurable: true }` | Chrome 98+ |
+| `createImageBitmap()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+| `fetch()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+| `reportError()` | `{ writable: true, enumerable: true, configurable: true }` | Chrome 95+ |
+| `btoa(), atob()` | `{ writable: true, enumerable: true, configurable: true }` | — |
+
+Tutti i getter `toString()` → `"function get <name>() { [native code] }"`.
+Tutti i setter `toString()` → `"function set <name>() { [native code] }"`.
+Tutte le funzioni `toString()` → `"function <name>() { [native code] }"`.
