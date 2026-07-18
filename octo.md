@@ -151,7 +151,13 @@ Prima di scrivere logica nuova, riusare cio' che esiste:
   `-o/--output <path>` (json/ndjson/text).
   Build stealth su Windows: `scripts/build-stealth.bat` (richiede MSVC Build
   Tools + NASM + LLVM/libclang + Ninja; vedi lo script).
-- **`monitor`**: da fare.
+- **`monitor`**: IMPLEMENTATO nel crate `crates/obscura-octo` (`monitor.rs` core +
+  `monitor_server.rs` HTTP/WS). CLI `obscura monitor <url>` con `--selector`,
+  `--condition`, `--on-change` (JS con l'elemento in scope), `--interval`,
+  `--max-runs`, `--min-change-interval` (debounce), `--save-to` (NDJSON append),
+  `--serve host:port` (HTTP `GET /last` + `/health`, WS `/events` broadcast) con
+  `--token`. Solo i cambiamenti vengono emessi (valore hashato e deduplicato);
+  backoff sugli errori. Test offline in `tests/monitor_core.rs` + unit hub.
 
 ---
 

@@ -20,6 +20,7 @@ COMMANDS:
   mcp         MCP server (stdio or --http) of browser tools for AI agents.
   search      Web search (duckduckgo/google/bing/custom) + optional scraping.
   octo-serve  Expose `search` over HTTP (POST /search) and WebSocket.
+  monitor     Watch a page and emit changes (NDJSON, or HTTP/WS stream).
 
 SAVE TO FILE: every command that prints output takes `-o/--output <PATH>`, e.g.
   obscura search \"rust\" --format ndjson -o C:\\tmp\\out.ndjson
@@ -317,6 +318,67 @@ MCP tool `octo_search`.")]
         #[arg(long)]
         token: Option<String>,
     },
+
+    /// Watch a page and emit a change whenever a watched value changes.
+    /// Prints NDJSON (or serves it over HTTP `GET /last` + WS `/events`).
+    #[command(after_help = "\
+EXAMPLES:
+  obscura monitor https://example.com/status --interval 30 --save-to watch.jsonl
+  obscura monitor https://x.com/page --selector \"article:first-child\" \\
+      --condition \"textContent.includes('2026')\" \\
+      --on-change \"JSON.stringify({text: textContent, t: Date.now()})\"
+  obscura monitor https://x.com --serve 127.0.0.1:9090   # GET /last, WS /events
+
+condition/on-change are JS run with the watched element in scope (bare
+`textContent` works). Only changes are emitted (values are hashed and deduped).")]
+    Monitor {
+        url: String,
+
+        /// CSS selector to watch (default: whole document).
+        #[arg(long)]
+        selector: Option<String>,
+
+        /// JS predicate; truthy marks a candidate change (default: always).
+        #[arg(long)]
+        condition: Option<String>,
+
+        /// JS producing the value to capture (default: element text).
+        #[arg(long)]
+        on_change: Option<String>,
+
+        #[arg(long, default_value_t = 60)]
+        interval: u64,
+
+        #[arg(long)]
+        timeout: Option<u64>,
+
+        #[arg(long)]
+        wait: Option<u64>,
+
+        /// Stop after N polls (0 = forever).
+        #[arg(long, default_value_t = 0)]
+        max_runs: u64,
+
+        /// Do not emit more than one change per this many seconds.
+        #[arg(long)]
+        min_change_interval: Option<u64>,
+
+        /// Append each change as an NDJSON line to this file.
+        #[arg(long)]
+        save_to: Option<std::path::PathBuf>,
+
+        /// Serve changes over HTTP+WS at host:port instead of printing.
+        #[arg(long)]
+        serve: Option<String>,
+
+        /// WebSocket port for --serve (default: HTTP port + 1).
+        #[arg(long)]
+        ws_port: Option<u16>,
+
+        /// Bearer token required when --serve binds a non-loopback host.
+        #[arg(long)]
+        token: Option<String>,
+    },
 }
 
 
@@ -548,6 +610,31 @@ async fn main() -> anyhow::Result<()> {
                 obscura_octo::PageFetcher::hidden_chrome(global_proxy, args.user_agent.clone(), args.allow_private_network),
             );
             obscura_octo::server::run(&host, port, ws_port, fetcher, token).await?;
+        }
+        Some(Command::Monitor { url, selector, condition, on_change, interval, timeout, wait, max_runs, min_change_interval, save_to, serve, ws_port, token }) => {
+            let req = obscura_octo::MonitorRequest {
+                url,
+                selector,
+                condition,
+                on_change,
+                interval: Some(interval),
+                timeout,
+                wait,
+                max_runs: Some(max_runs),
+                min_change_interval,
+            };
+            if let Some(addr) = serve {
+                let (host, port) = parse_host_port(&addr)?;
+                let ws_port = ws_port.unwrap_or(port + 1);
+                let fetcher: std::rc::Rc<dyn obscura_octo::Fetcher> = std::rc::Rc::new(
+                    obscura_octo::PageFetcher::hidden_chrome(global_proxy, args.user_agent.clone(), args.allow_private_network),
+                );
+                obscura_octo::monitor_server::run(req, fetcher, host, port, ws_port, token).await?;
+            } else {
+                let fetcher = obscura_octo::PageFetcher::hidden_chrome(global_proxy, None, args.allow_private_network);
+                let mut sink = NdjsonSink::new(save_to)?;
+                obscura_octo::run_monitor(&req, &fetcher, &mut sink, None).await;
+            }
         }
         None => {
             print_banner(args.port);
@@ -1424,6 +1511,51 @@ async fn run_parallel_scrape(
     }
 
     Ok(())
+}
+
+fn parse_host_port(addr: &str) -> anyhow::Result<(String, u16)> {
+    let (host, port) = addr
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("--serve expects host:port, got '{addr}'"))?;
+    let port: u16 = port
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid port in '{addr}'"))?;
+    let host = if host.is_empty() { "127.0.0.1" } else { host };
+    Ok((host.to_string(), port))
+}
+
+/// Monitor CLI sink: print each change as an NDJSON line to stdout, and append
+/// it to `--save-to` when set (flushed per line so a tailing consumer sees it).
+struct NdjsonSink {
+    file: Option<std::fs::File>,
+}
+
+impl NdjsonSink {
+    fn new(save_to: Option<std::path::PathBuf>) -> anyhow::Result<Self> {
+        let file = match save_to {
+            Some(path) => Some(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .map_err(|e| anyhow::anyhow!("failed to open {}: {}", path.display(), e))?,
+            ),
+            None => None,
+        };
+        Ok(NdjsonSink { file })
+    }
+}
+
+impl obscura_octo::OutputSink for NdjsonSink {
+    fn emit(&mut self, record: &serde_json::Value) {
+        use std::io::Write as _;
+        let line = record.to_string();
+        println!("{line}");
+        if let Some(f) = self.file.as_mut() {
+            let _ = writeln!(f, "{line}");
+            let _ = f.flush();
+        }
+    }
 }
 
 fn parse_engine(s: &str) -> anyhow::Result<obscura_octo::Engine> {

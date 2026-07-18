@@ -6,6 +6,7 @@ pub mod config;
 pub mod engine;
 pub mod fetcher;
 pub mod monitor;
+pub mod monitor_server;
 pub mod output;
 pub mod schema;
 pub mod search;
