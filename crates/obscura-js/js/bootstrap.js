@@ -8095,6 +8095,36 @@ globalThis.__obscura_init = function() {
   // version from navigator.userAgent and read the platform from the page
   // globals, so every stealth surface agrees without a per-mode override.
 
+  // §15: empty the navigator INSTANCE — in Chrome every attribute/method lives
+  // on Navigator.prototype (Object.keys(navigator) === []). Move all own props
+  // onto Navigator.prototype (attributes as masked getters, methods as data
+  // properties). Runs here, after every navigator surface is defined and
+  // native-masked, and before the secure gate below (which then drops the
+  // [SecureContext] ones on insecure origins). Idempotent per navigation.
+  (function() {
+    var nav = globalThis.navigator;
+    var proto = Object.getPrototypeOf(nav);
+    if (proto === Navigator.prototype) {
+      Object.getOwnPropertyNames(nav).forEach(function(key) {
+        var d = Object.getOwnPropertyDescriptor(nav, key);
+        if (!d) return;
+        if ('value' in d) {
+          if (typeof d.value === 'function') {
+            Object.defineProperty(proto, key, { value: d.value, writable: true, enumerable: true, configurable: true });
+          } else {
+            var val = d.value;
+            var getter = _markNative(function() { return val; });
+            if (typeof _markNativeAs === 'function') _markNativeAs(getter, 'function get ' + key + '() { [native code] }');
+            Object.defineProperty(proto, key, { get: getter, set: undefined, enumerable: true, configurable: true });
+          }
+        } else {
+          Object.defineProperty(proto, key, d);
+        }
+        try { delete nav[key]; } catch (e) {}
+      });
+    }
+  })();
+
   // Secure-context gating per Chromium IDL [SecureContext]. These navigator
   // attributes are undefined on non-secure origins (plain http, data:, opaque)
   // in real Chrome, so an http page must not see them. Compute the flag the way
