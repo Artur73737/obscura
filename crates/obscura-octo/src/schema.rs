@@ -111,3 +111,48 @@ pub struct SearchResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
+
+// ---- monitor ----
+
+/// A continuous page watch. All fields except `url` are optional; defaults are
+/// applied in `monitor::resolve`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct MonitorRequest {
+    pub url: String,
+    /// CSS selector to watch. When absent, the whole document is watched.
+    pub selector: Option<String>,
+    /// JS predicate; a truthy result marks a candidate change. Evaluated with
+    /// the selected element in scope (bare `textContent` works). Default: true.
+    pub condition: Option<String>,
+    /// JS expression producing the value to capture and compare. Default: the
+    /// element's trimmed text.
+    pub on_change: Option<String>,
+    /// Seconds between polls.
+    pub interval: Option<u64>,
+    /// Per-cycle navigation timeout (seconds).
+    pub timeout: Option<u64>,
+    /// Post-load settle (seconds).
+    pub wait: Option<u64>,
+    /// Stop after N polls. 0 (default) = run forever.
+    pub max_runs: Option<u64>,
+    /// Do not emit more than one change per this many seconds (debounce).
+    pub min_change_interval: Option<u64>,
+}
+
+/// One emitted change (or error) from a monitor run.
+#[derive(Clone, Debug, Serialize)]
+pub struct MonitorEvent {
+    /// 1-based poll number that produced this event.
+    pub run: u64,
+    /// Epoch milliseconds.
+    pub ts: u64,
+    /// The captured value (from `on_change`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    /// Stable hash of the value; consumers dedupe/ignore repeats.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    /// Set when the poll failed (navigation or eval error).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
