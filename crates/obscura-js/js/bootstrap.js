@@ -1,5 +1,23 @@
 "use strict";
 
+/*next_changes
+bootstrap/
+├── core.js                  // preHideInternals, hide reflection, toString override, errori
+├── timers.js                // setTimeout, setInterval, RAF, queueMicrotask
+├── console.js               // console shim
+├── dom-core.js              // Node, Element, Document, Text, Comment, Attr, ecc.
+├── css.js                   // CSSStyleDeclaration, DOMTokenList
+├── forms.js                 // input, validity, selection, setCustomValidity
+├── canvas.js                // CanvasRenderingContext2D, ImageData, ecc.
+├── media.js                 // Audio, Video, WebAudio, MediaStream, ecc.
+├── webapi.js                // WebSocket, EventSource, FileReader, IndexedDB, Fetch shims
+├── fingerprint.js           // _fpRand, _getFp, gpu, canvas, audio, screen, hardware
+├── navigator.js             // navigator + UserActivation, BarProp, Permissions, USB, ecc.
+├── secure-context.js        // gating per [SecureContext]
+├── init.js                  // __obscura_init che orchestra tutto
+└── index.js                 // importa tutto nell'ordine corretto
+*/
+
 // Pre-declare all internal globals as non-enumerable so they are invisible
 // to Object.keys(window) / for-in enumeration. Must run before any var
 // declarations or property assignments below: once a property is defined
@@ -4793,10 +4811,25 @@ globalThis.__obscura_setFieldValue = function(el, field, value) {
   el[field] = value;
 };
 
-// Build a FileList-like object: an array with the DOM's `item(i)` accessor.
+// FileList is a real global interface in Chrome (typeof FileList === "function",
+// input.files instanceof FileList). Expose the constructor + prototype and build
+// instances via Object.create so index access, length, item(), and iteration all
+// behave like Chrome. A missing FileList throws "FileList is not defined" on any
+// site with a file-upload component (React dropzone, Firebase storage, ...).
+if (typeof globalThis.FileList === 'undefined') {
+  globalThis.FileList = function FileList() { throw new TypeError('Illegal constructor'); };
+  Object.defineProperty(globalThis.FileList.prototype, Symbol.toStringTag, { value: 'FileList', configurable: true });
+  Object.defineProperty(globalThis.FileList.prototype, 'item', {
+    value: _markNative(function item(i) { i = i >>> 0; return this[i] || null; }),
+    writable: true, enumerable: true, configurable: true,
+  });
+  globalThis.FileList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
+  _markNative(globalThis.FileList);
+}
 function _makeFileList(files) {
-  const list = files.slice();
-  Object.defineProperty(list, "item", { value: (i) => list[i] || null, enumerable: false });
+  const list = Object.create(globalThis.FileList.prototype);
+  for (let i = 0; i < files.length; i++) list[i] = files[i];
+  Object.defineProperty(list, "length", { value: files.length, enumerable: false, configurable: true });
   return list;
 }
 function _emptyFileList() { return _makeFileList([]); }
@@ -6913,6 +6946,38 @@ globalThis.RTCIceCandidate = class RTCIceCandidate { constructor(d){this.candida
 // the first `get` because their request's `onsuccess` is never called. Fire
 // `onsuccess` asynchronously with `null` so reads complete-but-empty, which
 // most libraries treat as a cache miss and fall back to the network.
+// IndexedDB interface objects. Chrome exposes all of these as global
+// constructors; Firebase (auth/firestore) does `typeof IDBRequest !== 'undefined'`
+// and logs "IDBRequest is not defined" when they are missing. Expose the
+// constructors + prototypes (illegal-constructor, EventTarget-based where the IDL
+// says so) so typeof and instanceof match Chrome; the shim objects below are
+// created from these prototypes.
+(function() {
+  var ETp = (typeof globalThis.EventTarget === 'function') ? globalThis.EventTarget.prototype : Object.prototype;
+  var Ep = (typeof globalThis.Event === 'function') ? globalThis.Event.prototype : ETp;
+  function idbIface(name, parentProto) {
+    if (typeof globalThis[name] === 'function') return globalThis[name];
+    var ctor = ({ [name]: function () { throw new TypeError('Illegal constructor'); } })[name];
+    if (parentProto) ctor.prototype = Object.create(parentProto);
+    Object.defineProperty(ctor.prototype, 'constructor', { value: ctor, writable: true, enumerable: false, configurable: true });
+    Object.defineProperty(ctor.prototype, Symbol.toStringTag, { value: name, configurable: true });
+    _markNative(ctor);
+    Object.defineProperty(globalThis, name, { value: ctor, writable: true, enumerable: false, configurable: true });
+    return ctor;
+  }
+  var Req = idbIface('IDBRequest', ETp);
+  idbIface('IDBOpenDBRequest', Req.prototype);
+  idbIface('IDBDatabase', ETp);
+  idbIface('IDBTransaction', ETp);
+  idbIface('IDBObjectStore', null);
+  idbIface('IDBIndex', null);
+  var Cur = idbIface('IDBCursor', null);
+  idbIface('IDBCursorWithValue', Cur.prototype);
+  idbIface('IDBKeyRange', null);
+  idbIface('IDBFactory', null);
+  idbIface('IDBVersionChangeEvent', Ep);
+})();
+
 function _idbRequest(produceResult) {
   const req = {
     result: undefined,
@@ -6925,6 +6990,7 @@ function _idbRequest(produceResult) {
     addEventListener(type, fn) { req['on' + type] = fn; },
     removeEventListener(type, fn) { if (req['on' + type] === fn) req['on' + type] = null; },
   };
+  try { Object.setPrototypeOf(req, globalThis.IDBRequest.prototype); } catch (e) {}
   Promise.resolve().then(() => {
     try {
       req.result = produceResult();
@@ -7022,12 +7088,17 @@ globalThis.indexedDB = {
   databases() { return Promise.resolve([]); },
   cmp(a, b) { return a < b ? -1 : a > b ? 1 : 0; },
 };
-globalThis.IDBKeyRange = {
-  only(v) { return { lower: v, upper: v, lowerOpen: false, upperOpen: false, includes(x) { return x === v; } }; },
-  lowerBound(v, open) { return { lower: v, upper: null, lowerOpen: !!open, upperOpen: false, includes(x) { return open ? x > v : x >= v; } }; },
-  upperBound(v, open) { return { lower: null, upper: v, lowerOpen: false, upperOpen: !!open, includes(x) { return open ? x < v : x <= v; } }; },
-  bound(l, u, lo, uo) { return { lower: l, upper: u, lowerOpen: !!lo, upperOpen: !!uo, includes(x) { return (lo ? x > l : x >= l) && (uo ? x < u : x <= u); } }; },
-};
+// IDBKeyRange is a constructor (defined above) with STATIC factory methods in
+// Chrome, not a plain object. Attach the statics to the constructor so
+// typeof IDBKeyRange === "function" and IDBKeyRange.bound(...) both work.
+(function() {
+  var R = globalThis.IDBKeyRange;
+  function stat(name, fn) { _markNative(fn); if (typeof _markNativeAs === 'function') _markNativeAs(fn, 'function ' + name + '() { [native code] }'); R[name] = fn; }
+  stat('only', function only(v) { return { lower: v, upper: v, lowerOpen: false, upperOpen: false, includes(x) { return x === v; } }; });
+  stat('lowerBound', function lowerBound(v, open) { return { lower: v, upper: null, lowerOpen: !!open, upperOpen: false, includes(x) { return open ? x > v : x >= v; } }; });
+  stat('upperBound', function upperBound(v, open) { return { lower: null, upper: v, lowerOpen: false, upperOpen: !!open, includes(x) { return open ? x < v : x <= v; } }; });
+  stat('bound', function bound(l, u, lo, uo) { return { lower: l, upper: u, lowerOpen: !!lo, upperOpen: !!uo, includes(x) { return (lo ? x > l : x >= l) && (uo ? x < u : x <= u); } }; });
+})();
 
 globalThis.caches = {
   open() { return Promise.resolve({ match(){return Promise.resolve(undefined);}, put(){return Promise.resolve();}, delete(){return Promise.resolve(false);}, keys(){return Promise.resolve([]);} }); },
