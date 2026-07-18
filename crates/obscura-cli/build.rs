@@ -33,4 +33,20 @@ fn main() {
         .unwrap_or_else(|| env::var("CARGO_PKG_VERSION").expect("Cargo sets CARGO_PKG_VERSION"));
 
     println!("cargo:rustc-env=OBSCURA_BUILD_VERSION={version}");
+
+    // On Windows, embed the app icon (assets/logo.svg rasterized to
+    // assets/icon.ico) into the `obscura` executable's resources so Explorer
+    // and the taskbar show it. No-op on other targets.
+    #[cfg(target_os = "windows")]
+    {
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icon.ico");
+        if std::path::Path::new(icon).exists() {
+            println!("cargo:rerun-if-changed={icon}");
+            let mut res = winresource::WindowsResource::new();
+            res.set_icon(icon);
+            if let Err(e) = res.compile() {
+                println!("cargo:warning=failed to embed icon: {e}");
+            }
+        }
+    }
 }

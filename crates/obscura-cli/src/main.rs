@@ -12,6 +12,37 @@ use tokio::time::{timeout, Duration};
     name = "obscura",
     version = env!("OBSCURA_BUILD_VERSION"),
     about = "Obscura - A lightweight headless browser for web scraping and automation",
+    after_help = "\
+COMMANDS:
+  serve       CDP server for Puppeteer/Playwright (ws://127.0.0.1:9222).
+  fetch       Render one page; dump html/text/links/markdown/assets or --eval.
+  scrape      Render many URLs in parallel; --eval each; JSON/text output.
+  mcp         MCP server (stdio or --http) of browser tools for AI agents.
+  search      Web search (duckduckgo/google/bing/custom) + optional scraping.
+  octo-serve  Expose `search` over HTTP (POST /search) and WebSocket.
+
+SAVE TO FILE: every command that prints output takes `-o/--output <PATH>`, e.g.
+  obscura search \"rust\" --format ndjson -o C:\\tmp\\out.ndjson
+  obscura fetch https://example.com --dump text -o page.txt
+
+REAL CHROME: when Obscura is built with the stealth feature
+(scripts/build-stealth.bat), EVERY command runs with a real, hidden Chrome
+identity by default (real TLS fingerprint) — no --stealth flag needed. A plain
+build keeps that identity opt-in via --stealth.
+
+ENGINES: duckduckgo and Bing return results with the stealth build. Google
+additionally IP-blocks with reCAPTCHA and needs a clean residential --proxy.
+--max-results is a ceiling; an engine may have fewer distinct results. Add
+`--fallback duckduckgo` to auto-recover when an engine is blocked or throttled.
+
+EXAMPLES:
+  obscura fetch https://example.com --dump text
+  obscura search \"news iran\" --engine duckduckgo --max-results 20
+  obscura search \"rust async\" --depth page --scrape text --format ndjson -o r.ndjson
+  obscura octo-serve --port 8080            # search over HTTP (POST /search) + WS
+
+NOTE: search is a SUBCOMMAND, not a flag. Use `obscura search \"query\"`, not
+`--search`. Run `obscura <command> --help` for a command's options.",
 )]
 struct Args {
     #[arg(short, long, global = true)]
@@ -58,6 +89,8 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Start a Chrome DevTools Protocol (CDP) server over WebSocket. Connect
+    /// Puppeteer/Playwright to ws://HOST:PORT and drive a real headless browser.
     Serve {
         #[arg(short, long, default_value_t = 9222)]
         port: u16,
@@ -94,6 +127,9 @@ enum Command {
         quiet: bool,
     },
 
+    /// Fetch and render a single page (runs JavaScript), then dump it as
+    /// html/text/links/markdown/assets/original, or evaluate a JS expression
+    /// with --eval. Use --file for a batch of raw fetches.
     Fetch {
         // Optional so a batch run can pass URLs via --file instead. A single
         // positional URL keeps the original one-shot behaviour.
@@ -147,6 +183,8 @@ enum Command {
         storage_dir: Option<std::path::PathBuf>,
     },
 
+    /// Scrape many URLs in parallel using worker processes; evaluate --eval on
+    /// each and print JSON/text. For rendered/DOM batch output at scale.
     Scrape {
         urls: Vec<String>,
 
@@ -166,6 +204,8 @@ enum Command {
         quiet: bool,
     },
 
+    /// Run the Model Context Protocol server (stdio or --http) exposing browser
+    /// tools (navigate, click, extract, octo_search, ...) to AI agents.
     Mcp {
         #[arg(long)]
         http: bool,
@@ -183,6 +223,100 @@ enum Command {
         user_agent: Option<String>,
     },
 
+    /// Search a web engine with Obscura and (optionally) scrape the results.
+    /// Delegates to the shared core in the obscura-octo crate.
+    #[command(after_help = "\
+EXAMPLES:
+  obscura search \"news iran\"
+  obscura search \"climate report\" --site nature.com --site nasa.gov
+  obscura search \"rust tokio\" --depth page --scrape text --format ndjson -o out.ndjson
+  obscura search \"q\" --engine custom --engine-url \"https://searx.be/search?q={query}\"
+
+DEPTH:  serp = SERP links only | page = also scrape each result | deep = follow
+        one level of same-host links. SCRAPE: none|text|html|links.
+--max-results is a CEILING: the count returned depends on how many distinct
+results the engine yields (pages are fetched until the ceiling or the engine
+runs out). To get page CONTENT, add `--depth page --scrape text`.
+The same search is available over HTTP/WS via `obscura octo-serve`, and as the
+MCP tool `octo_search`.")]
+    Search {
+        query: String,
+
+        /// google | bing | duckduckgo | custom
+        #[arg(long, default_value = "duckduckgo")]
+        engine: String,
+
+        #[arg(long)]
+        max_results: Option<usize>,
+
+        #[arg(long)]
+        lang: Option<String>,
+
+        /// Limit results to this domain (repeatable).
+        #[arg(long)]
+        site: Vec<String>,
+
+        /// Exclude this domain (repeatable).
+        #[arg(long)]
+        exclude_site: Vec<String>,
+
+        /// Match --site exactly (no subdomains).
+        #[arg(long)]
+        site_exact: bool,
+
+        /// serp | page | deep
+        #[arg(long, default_value = "serp")]
+        depth: String,
+
+        /// none | text | html | links (default text for page/deep).
+        #[arg(long)]
+        scrape: Option<String>,
+
+        /// json | ndjson | text
+        #[arg(long, default_value = "json")]
+        format: String,
+
+        /// JS evaluated on every scraped result page.
+        #[arg(long)]
+        eval: Option<String>,
+
+        #[arg(long)]
+        wait: Option<u64>,
+
+        #[arg(long)]
+        timeout: Option<u64>,
+
+        #[arg(long)]
+        concurrency: Option<usize>,
+
+        /// Engine to retry with when the primary returns zero results.
+        #[arg(long)]
+        fallback: Option<String>,
+
+        /// SERP URL template for --engine custom ({query}/{lang}).
+        #[arg(long)]
+        engine_url: Option<String>,
+
+        #[arg(long, short = 'o')]
+        output: Option<std::path::PathBuf>,
+    },
+
+    /// Serve the octo features (search) over HTTP and WebSocket.
+    OctoServe {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+
+        /// WebSocket port (default: HTTP port + 1).
+        #[arg(long)]
+        ws_port: Option<u16>,
+
+        /// Bearer token required when binding a non-loopback host.
+        #[arg(long)]
+        token: Option<String>,
+    },
 }
 
 
@@ -325,7 +459,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let global_proxy = args.proxy.clone();
-    let stealth = args.stealth;
+    // Obscura is a real, hidden Chrome: when built with the stealth feature the
+    // real-browser identity (TLS impersonation + consistent fingerprint) is the
+    // default for every command, not an opt-in. A non-stealth build is unchanged
+    // (identity applied only when --stealth is passed).
+    let stealth = args.stealth || cfg!(feature = "stealth");
 
     match args.command {
         Some(Command::Serve { port, host, proxy, user_agent, workers, allow_file_access, storage_dir, quiet: _ }) => {
@@ -395,6 +533,21 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 obscura_mcp::run(mcp_proxy, user_agent, stealth).await?;
             }
+        }
+        Some(Command::Search { query, engine, max_results, lang, site, exclude_site, site_exact, depth, scrape, format, eval, wait, timeout, concurrency, fallback, engine_url, output }) => {
+            run_octo_search(
+                query, engine, max_results, lang, site, exclude_site, site_exact, depth, scrape,
+                format, eval, wait, timeout, concurrency, fallback, engine_url, output,
+                global_proxy, stealth, args.allow_private_network,
+            ).await?;
+        }
+        Some(Command::OctoServe { host, port, ws_port, token }) => {
+            let ws_port = ws_port.unwrap_or(port + 1);
+            let _ = stealth;
+            let fetcher: std::rc::Rc<dyn obscura_octo::Fetcher> = std::rc::Rc::new(
+                obscura_octo::PageFetcher::hidden_chrome(global_proxy, args.user_agent.clone(), args.allow_private_network),
+            );
+            obscura_octo::server::run(&host, port, ws_port, fetcher, token).await?;
         }
         None => {
             print_banner(args.port);
@@ -1270,6 +1423,114 @@ async fn run_parallel_scrape(
         }
     }
 
+    Ok(())
+}
+
+fn parse_engine(s: &str) -> anyhow::Result<obscura_octo::Engine> {
+    use obscura_octo::Engine::*;
+    match s.trim().to_ascii_lowercase().as_str() {
+        "google" => Ok(Google),
+        "bing" => Ok(Bing),
+        "duckduckgo" | "ddg" => Ok(Duckduckgo),
+        "custom" => Ok(Custom),
+        other => anyhow::bail!("unknown engine '{other}' (google|bing|duckduckgo|custom)"),
+    }
+}
+
+fn parse_depth(s: &str) -> anyhow::Result<obscura_octo::Depth> {
+    use obscura_octo::Depth::*;
+    match s.trim().to_ascii_lowercase().as_str() {
+        "serp" => Ok(Serp),
+        "page" => Ok(Page),
+        "deep" => Ok(Deep),
+        other => anyhow::bail!("unknown depth '{other}' (serp|page|deep)"),
+    }
+}
+
+fn parse_scrape(s: &str) -> anyhow::Result<obscura_octo::ScrapeKind> {
+    use obscura_octo::ScrapeKind::*;
+    match s.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok(None),
+        "text" => Ok(Text),
+        "html" => Ok(Html),
+        "links" => Ok(Links),
+        other => anyhow::bail!("unknown scrape '{other}' (none|text|html|links)"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_octo_search(
+    query: String,
+    engine: String,
+    max_results: Option<usize>,
+    lang: Option<String>,
+    site: Vec<String>,
+    exclude_site: Vec<String>,
+    site_exact: bool,
+    depth: String,
+    scrape: Option<String>,
+    format: String,
+    eval: Option<String>,
+    wait: Option<u64>,
+    timeout: Option<u64>,
+    concurrency: Option<usize>,
+    fallback: Option<String>,
+    engine_url: Option<String>,
+    output: Option<std::path::PathBuf>,
+    proxy: Option<String>,
+    stealth: bool,
+    allow_private_network: bool,
+) -> anyhow::Result<()> {
+    let req = obscura_octo::SearchRequest {
+        query,
+        engine: Some(parse_engine(&engine)?),
+        max_results,
+        lang,
+        site,
+        exclude_site,
+        site_exact: Some(site_exact),
+        depth: Some(parse_depth(&depth)?),
+        scrape: scrape.as_deref().map(parse_scrape).transpose()?,
+        format: None,
+        eval,
+        wait,
+        timeout,
+        concurrency,
+        fallback: fallback.as_deref().map(parse_engine).transpose()?,
+        engine_url,
+    };
+
+    // Obscura's search always drives a real, hidden Chrome identity (stealth on)
+    // regardless of the global --stealth flag: automated but real navigation.
+    let _ = stealth;
+    let fetcher = obscura_octo::PageFetcher::hidden_chrome(proxy, None, allow_private_network);
+    let mut sink = obscura_octo::CollectSink::default();
+    let resp = obscura_octo::run_search(&req, &fetcher, &mut sink).await;
+
+    let rendered = match format.trim().to_ascii_lowercase().as_str() {
+        "json" => serde_json::to_string_pretty(&resp)?,
+        "ndjson" => {
+            let mut out = String::new();
+            for rec in &sink.records {
+                out.push_str(&serde_json::to_string(rec)?);
+                out.push('\n');
+            }
+            if let Some(summary) = &sink.summary {
+                out.push_str(&serde_json::to_string(summary)?);
+                out.push('\n');
+            }
+            out.trim_end().to_string()
+        }
+        "text" => resp
+            .results
+            .iter()
+            .map(|r| format!("{}\t{}\t{}", r.rank, r.url, r.title))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => anyhow::bail!("unknown format '{other}' (json|ndjson|text)"),
+    };
+
+    write_or_print(rendered, output.as_ref()).await?;
     Ok(())
 }
 

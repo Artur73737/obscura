@@ -585,6 +585,29 @@ fn handle_tools_list(id: Value) -> RpcResponse {
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
+                "name": "octo_search",
+                "description": "Search a web engine (duckduckgo|google|bing|custom) and optionally scrape each result. Args mirror the SearchRequest schema: {query, engine?, max_results?, lang?, site?[], exclude_site?[], depth? (serp|page|deep), scrape? (none|text|html|links), eval?, wait?, timeout?, fallback?, engine_url?}. Returns the full SearchResponse as JSON.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "engine": { "type": "string", "enum": ["google", "bing", "duckduckgo", "custom"] },
+                        "max_results": { "type": "number" },
+                        "lang": { "type": "string" },
+                        "site": { "type": "array", "items": { "type": "string" } },
+                        "exclude_site": { "type": "array", "items": { "type": "string" } },
+                        "depth": { "type": "string", "enum": ["serp", "page", "deep"] },
+                        "scrape": { "type": "string", "enum": ["none", "text", "html", "links"] },
+                        "eval": { "type": "string" },
+                        "wait": { "type": "number" },
+                        "timeout": { "type": "number" },
+                        "fallback": { "type": "string" },
+                        "engine_url": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
                 "name": "browser_set_storage_state",
                 "description": "Restore session state previously returned by browser_storage_state. Pass the JSON object. Use to bring an authenticated session back without re-logging in.",
                 "inputSchema": {
@@ -647,6 +670,7 @@ async fn handle_tool_call(id: Value, params: &Value, state: &mut BrowserState) -
         "browser_search" => tool_search(args, state),
         "browser_storage_state" => tool_storage_state(state),
         "browser_set_storage_state" => tool_set_storage_state(args, state),
+        "octo_search" => tool_octo_search(args, state).await,
         _ => Err(format!("Unknown tool: {name}")),
     };
 
@@ -659,6 +683,21 @@ async fn handle_tool_call(id: Value, params: &Value, state: &mut BrowserState) -
             "isError": true
         })),
     }
+}
+
+/// Run a web search via the shared obscura-octo core. Uses a fresh single-use
+/// Page fetcher so it does not disturb the agent's open tabs. The agent tests
+/// this tool directly; the core logic is shared with the CLI/HTTP/WS surfaces.
+async fn tool_octo_search(args: &Value, state: &BrowserState) -> Result<String, String> {
+    let req: obscura_octo::SearchRequest = serde_json::from_value(args.clone())
+        .map_err(|e| format!("invalid arguments: {e}"))?;
+    if req.query.trim().is_empty() {
+        return Err("missing 'query'".to_string());
+    }
+    let fetcher = obscura_octo::PageFetcher::hidden_chrome(None, state.user_agent.clone(), false);
+    let mut sink = obscura_octo::NullSink;
+    let resp = obscura_octo::run_search(&req, &fetcher, &mut sink).await;
+    serde_json::to_string_pretty(&resp).map_err(|e| e.to_string())
 }
 
 /// Resolve a tool call's element target from either `ref` (preferred) or

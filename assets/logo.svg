@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- sfondo nero opaco, non puro -->
+  <rect x="4" y="4" width="192" height="192" rx="28" ry="28" fill="#141414" stroke="#2a2a2a" stroke-width="3"/>
+  <!-- gruppo spostato a destra per bilanciare l'illusione ottica del crescente -->
+  <g transform="translate(3, 0)">
+    <!-- luna piena base (bianco opaco) -->
+    <circle cx="100" cy="100" r="48" fill="#e6e2d8"/>
+    <!-- disco che morde: quarto crescente -->
+    <circle cx="118" cy="100" r="40" fill="#141414"/>
+  </g>
+</svg>

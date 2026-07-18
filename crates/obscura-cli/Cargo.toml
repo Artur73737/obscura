@@ -13,11 +13,12 @@ path = "src/worker.rs"
 
 [features]
 default = []
-stealth = ["obscura-browser/stealth", "obscura-net/stealth", "obscura-mcp/stealth"]
+stealth = ["obscura-browser/stealth", "obscura-net/stealth", "obscura-mcp/stealth", "obscura-octo/stealth"]
 
 [dependencies]
 obscura-browser = { workspace = true }
 obscura-mcp = { workspace = true }
+obscura-octo = { workspace = true }
 obscura-cdp = { workspace = true }
 obscura-dom = { workspace = true }
 obscura-net = { workspace = true }
@@ -30,3 +31,6 @@ anyhow = { workspace = true }
 url = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
