@@ -3265,6 +3265,145 @@ globalThis.navigator = {
   Object.setPrototypeOf(globalThis.navigator, _navProto);
 })();
 
+// Stealth gap-fill (Block A, byte-exact): navigator sub-APIs and window surfaces
+// Chrome 136+ exposes. Built with REAL interface objects — each has its own
+// constructor on window (typeof USB === 'function'), a prototype carrying the
+// members (so getOwnPropertyDescriptor on the instance is undefined, like
+// Chrome), and instances via Object.create so `navigator.usb instanceof USB`.
+// Kept inside bootstrap so _markNative masks every getter/method as [native
+// code] with no leaked hook. Shapes verified against stealth/ch/*.idl.
+(function() {
+  var Nav = Navigator.prototype;
+  var ETp = (typeof globalThis.EventTarget === 'function') ? globalThis.EventTarget.prototype : Object.prototype;
+
+  // Register an interface: name its constructor, chain its prototype, tag it,
+  // mask it native, and expose the constructor on window as a non-enumerable
+  // property (how Chrome exposes interface objects).
+  function iface(ctor, name, parentProto) {
+    if (parentProto) { ctor.prototype = Object.create(parentProto); }
+    Object.defineProperty(ctor.prototype, 'constructor',
+      { value: ctor, writable: true, enumerable: false, configurable: true });
+    Object.defineProperty(ctor.prototype, Symbol.toStringTag,
+      { value: name, writable: false, enumerable: false, configurable: true });
+    _markNative(ctor);
+    Object.defineProperty(globalThis, name,
+      { value: ctor, writable: true, enumerable: false, configurable: true });
+    return ctor;
+  }
+  // readonly attribute -> accessor on the prototype, getter masked as
+  // "function get <key>() { [native code] }".
+  function attr(proto, key, getFn, setFn) {
+    _markNative(getFn);
+    if (typeof _markNativeAs === 'function') _markNativeAs(getFn, 'function get ' + key + '() { [native code] }');
+    if (setFn) { _markNative(setFn); if (typeof _markNativeAs === 'function') _markNativeAs(setFn, 'function set ' + key + '() { [native code] }'); }
+    Object.defineProperty(proto, key, { get: getFn, set: setFn, enumerable: true, configurable: true });
+  }
+  // operation -> data property on the prototype, masked as "function <name>() { [native code] }".
+  function op(proto, name, fn) {
+    _markNative(fn);
+    if (typeof _markNativeAs === 'function') _markNativeAs(fn, 'function ' + name + '() { [native code] }');
+    Object.defineProperty(proto, name, { value: fn, writable: true, enumerable: true, configurable: true });
+  }
+  // EventHandler IDL attribute (on* ) -> accessor pair, per-instance storage.
+  function handler(proto, key) {
+    var store = new WeakMap();
+    attr(proto, key,
+      function() { return store.get(this) || null; },
+      function(v) { store.set(this, typeof v === 'function' ? v : null); });
+  }
+  // navigator [SameObject] attribute returning a cached singleton.
+  function navSame(key, obj) {
+    attr(Nav, key, function() { return obj; });
+  }
+  var _permissionDenied = function() {
+    return Promise.reject(new DOMException('Must be handling a user gesture to show a permission request.', 'SecurityError'));
+  };
+
+  // ---- BarProp (§50) ----
+  var BarProp = iface(function BarProp() { throw new TypeError('Illegal constructor'); }, 'BarProp', null);
+  attr(BarProp.prototype, 'visible', function() { return true; }); // real windowed Chrome
+  function newBarProp() { return Object.create(BarProp.prototype); }
+
+  // ---- UserActivation (§33) ----
+  var UserActivation = iface(function UserActivation() { throw new TypeError('Illegal constructor'); }, 'UserActivation', null);
+  attr(UserActivation.prototype, 'hasBeenActive', function() { return true; });
+  attr(UserActivation.prototype, 'isActive', function() { return false; });
+  var _userAct = Object.create(UserActivation.prototype);
+  navSame('userActivation', _userAct);
+
+  // ---- USB : EventTarget (§28, SecureContext) ----
+  var USB = iface(function USB() { throw new TypeError('Illegal constructor'); }, 'USB', ETp);
+  op(USB.prototype, 'getDevices', function getDevices() { return Promise.resolve([]); });
+  op(USB.prototype, 'requestDevice', _permissionDenied);
+  handler(USB.prototype, 'onconnect');
+  handler(USB.prototype, 'ondisconnect');
+  navSame('usb', Object.create(USB.prototype));
+
+  // ---- Bluetooth : EventTarget (§30, SecureContext) ----
+  var Bluetooth = iface(function Bluetooth() { throw new TypeError('Illegal constructor'); }, 'Bluetooth', ETp);
+  op(Bluetooth.prototype, 'getAvailability', function getAvailability() { return Promise.resolve(false); });
+  op(Bluetooth.prototype, 'requestDevice', _permissionDenied);
+  attr(Bluetooth.prototype, 'referringDevice', function() { return null; });
+  navSame('bluetooth', Object.create(Bluetooth.prototype));
+
+  // ---- MediaSession (§36, not SecureContext) ----
+  var MediaSession = iface(function MediaSession() { throw new TypeError('Illegal constructor'); }, 'MediaSession', null);
+  var _msMeta = new WeakMap(), _msState = new WeakMap();
+  attr(MediaSession.prototype, 'metadata',
+    function() { return _msMeta.get(this) || null; },
+    function(v) { _msMeta.set(this, v); });
+  attr(MediaSession.prototype, 'playbackState',
+    function() { return _msState.get(this) || 'none'; },
+    function(v) { if (['none','paused','playing'].indexOf(v) >= 0) _msState.set(this, v); });
+  op(MediaSession.prototype, 'setActionHandler', function setActionHandler() {});
+  op(MediaSession.prototype, 'setPositionState', function setPositionState() {});
+  op(MediaSession.prototype, 'setMicrophoneActive', function setMicrophoneActive() {});
+  op(MediaSession.prototype, 'setCameraActive', function setCameraActive() {});
+  navSame('mediaSession', Object.create(MediaSession.prototype));
+
+  // ---- XRSystem : EventTarget (§37, SecureContext) ----
+  var XRSystem = iface(function XRSystem() { throw new TypeError('Illegal constructor'); }, 'XRSystem', ETp);
+  op(XRSystem.prototype, 'isSessionSupported', function isSessionSupported(mode) { return Promise.resolve(mode === 'inline'); });
+  op(XRSystem.prototype, 'requestSession', _permissionDenied);
+  handler(XRSystem.prototype, 'ondevicechange');
+  // Chrome exposes the typedef alias `XR` as the same constructor object.
+  Object.defineProperty(globalThis, 'XR', { value: XRSystem, writable: true, enumerable: false, configurable: true });
+  navSame('xr', Object.create(XRSystem.prototype));
+
+  // ---- TrustedTypePolicyFactory : EventTarget (§41, not SecureContext) ----
+  var TTFactory = iface(function TrustedTypePolicyFactory() { throw new TypeError('Illegal constructor'); }, 'TrustedTypePolicyFactory', ETp);
+  op(TTFactory.prototype, 'createPolicy', function createPolicy(name, rules) {
+    rules = rules || {};
+    return {
+      name: name,
+      createHTML: function createHTML(s) { return rules.createHTML ? rules.createHTML(s) : s; },
+      createScript: function createScript(s) { return rules.createScript ? rules.createScript(s) : s; },
+      createScriptURL: function createScriptURL(s) { return rules.createScriptURL ? rules.createScriptURL(s) : s; },
+    };
+  });
+  op(TTFactory.prototype, 'isHTML', function isHTML() { return false; });
+  op(TTFactory.prototype, 'isScript', function isScript() { return false; });
+  op(TTFactory.prototype, 'isScriptURL', function isScriptURL() { return false; });
+  op(TTFactory.prototype, 'getAttributeType', function getAttributeType() { return null; });
+  op(TTFactory.prototype, 'getPropertyType', function getPropertyType() { return null; });
+  op(TTFactory.prototype, 'getTypeMapping', function getTypeMapping() { return null; });
+  attr(TTFactory.prototype, 'emptyHTML', function() { return ''; });
+  attr(TTFactory.prototype, 'emptyScript', function() { return ''; });
+  attr(TTFactory.prototype, 'defaultPolicy', function() { return null; });
+  if (typeof globalThis.trustedTypes === 'undefined') {
+    var _tt = Object.create(TTFactory.prototype);
+    attr(globalThis, 'trustedTypes', function() { return _tt; });
+  }
+
+  // ---- window BarProp singletons (§50) ----
+  ['locationbar', 'menubar', 'personalbar', 'scrollbars', 'statusbar', 'toolbar'].forEach(function(name) {
+    if (typeof globalThis[name] === 'undefined') {
+      var bar = newBarProp();
+      attr(globalThis, name, function() { return bar; });
+    }
+  });
+})();
+
 globalThis.chrome = {
   app: { isInstalled: false, InstallState: { DISABLED: "disabled", INSTALLED: "installed", NOT_INSTALLED: "not_installed" }, RunningState: { CANNOT_RUN: "cannot_run", READY_TO_RUN: "ready_to_run", RUNNING: "running" } },
   runtime: { OnInstalledReason: {}, OnRestartRequiredReason: {}, PlatformArch: {}, PlatformNaclArch: {}, PlatformOs: {}, RequestUpdateCheckStatus: {}, connect() { throw new Error("Could not establish connection. Receiving end does not exist."); }, sendMessage() { throw new Error("Could not establish connection. Receiving end does not exist."); } },
@@ -6899,6 +7038,30 @@ navigator.wakeLock = { request() { return Promise.reject(new DOMException('Not a
 
 globalThis.opener = null;
 
+// Cross-context consistency (§14): a Worker's navigator must report the SAME
+// identity as the main thread, or a detector reading navigator.* inside a Worker
+// sees a mismatch (or undefined). Build a WorkerNavigator mirror from the main
+// navigator so userAgent/platform/hardwareConcurrency/deviceMemory/languages/
+// userAgentData agree across contexts. WorkerNavigator exposes the NavigatorID/
+// Language/OnLine/ConcurrentHardware/DeviceMemory/UA subset (no plugins, no UI
+// APIs), matching the Chromium IDL mixins.
+function _makeWorkerNavigator() {
+  var n = globalThis.navigator;
+  var wn = Object.create(null);
+  var keys = ['userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
+              'product', 'productSub', 'vendor', 'vendorSub', 'language',
+              'onLine', 'hardwareConcurrency', 'deviceMemory'];
+  for (var i = 0; i < keys.length; i++) {
+    try { wn[keys[i]] = n[keys[i]]; } catch (e) {}
+  }
+  try { wn.languages = n.languages ? Array.prototype.slice.call(n.languages) : ['en-US', 'en']; } catch (e) { wn.languages = ['en-US', 'en']; }
+  try { if (n.userAgentData) wn.userAgentData = n.userAgentData; } catch (e) {}
+  // WorkerNavigator is exposed via Object.create(WorkerNavigator.prototype) in
+  // Chrome; keep it a plain object here (worker scope is not a real realm), but
+  // the fingerprint-relevant values match the main thread exactly.
+  return wn;
+}
+
 globalThis.Worker = class Worker {
   constructor(url) {
     this.onmessage = null;
@@ -6962,6 +7125,13 @@ globalThis.Worker = class Worker {
       console: globalThis.console,
       performance: globalThis.performance,
       location: globalThis.location,
+      // §14 cross-context: same identity as the main thread inside the Worker.
+      navigator: _makeWorkerNavigator(),
+      OffscreenCanvas: globalThis.OffscreenCanvas,
+      ImageData: globalThis.ImageData,
+      URL: globalThis.URL,
+      Blob: globalThis.Blob,
+      importScripts: _markNative(function importScripts() {}),
     };
     scope.self = scope;
     return scope;
@@ -6971,8 +7141,13 @@ globalThis.Worker = class Worker {
     const worker = this;
     const scope = worker._makeScope();
     try {
-      const fn = new Function('self', 'postMessage', 'addEventListener', 'close', worker._code);
-      fn(scope, scope.postMessage, scope.addEventListener, scope.close);
+      // Pass the worker globals as parameters so BARE identifiers (navigator,
+      // importScripts, OffscreenCanvas, ...) resolve to the worker scope, not
+      // the main realm — a detector inside the Worker reads them unqualified.
+      const fn = new Function('self', 'postMessage', 'addEventListener', 'close',
+        'importScripts', 'navigator', 'OffscreenCanvas', 'location', 'fetch', worker._code);
+      fn(scope, scope.postMessage, scope.addEventListener, scope.close,
+        scope.importScripts, scope.navigator, scope.OffscreenCanvas, scope.location, scope.fetch);
     } catch(e) {
       console.error('Worker error:', e.message);
       if (worker.onerror) worker.onerror(e);
@@ -6985,8 +7160,10 @@ globalThis.Worker = class Worker {
       if (worker._terminated || !worker._code) return;
       const scope = worker._makeScope();
       try {
-        const fn = new Function('self', 'postMessage', 'addEventListener', 'close', worker._code);
-        fn(scope, scope.postMessage, scope.addEventListener, scope.close);
+        const fn = new Function('self', 'postMessage', 'addEventListener', 'close',
+          'importScripts', 'navigator', 'OffscreenCanvas', 'location', 'fetch', worker._code);
+        fn(scope, scope.postMessage, scope.addEventListener, scope.close,
+          scope.importScripts, scope.navigator, scope.OffscreenCanvas, scope.location, scope.fetch);
         const evs = (scope._ev && scope._ev['message']) || [];
         if (evs.length) { for (const h of evs) h({ data }); }
         else if (scope.onmessage) scope.onmessage({ data });
@@ -7846,8 +8023,18 @@ if (typeof ShadowRoot !== 'undefined' && !ShadowRoot.prototype.elementFromPoint)
 }
 
 globalThis.__obscura_init = function() {
-  _fpSeed = Date.now() ^ (Math.random() * 0xFFFFFFFF >>> 0);
-  _fpCache = null;
+  // Deterministic, STABLE fingerprint seed. A real browser presents the same
+  // machine (GPU, screen, canvas, audio, hardware) on every navigation, so the
+  // seed must not change per page load. Seed once: from a caller-provided
+  // per-profile value (`__obscura_fp_seed`, set from Rust so different profiles
+  // look like different machines) or a fixed default otherwise. Everything
+  // derived via _fpRand then stays consistent across the whole session, while
+  // the realistic value pools keep it plausible.
+  if (!_fpSeed) {
+    var _seed = (globalThis.__obscura_fp_seed >>> 0) || 0x9e3779b1;
+    _fpSeed = _seed | 0;
+    _fpCache = null;
+  }
   // A real navigation just completed (this runs after set_url), so drop any
   // URL a location setter previewed synchronously and let document_url drive
   // location.href again, including any redirect target.
@@ -7883,6 +8070,52 @@ globalThis.__obscura_init = function() {
   // userAgentData brands and getHighEntropyValues now derive the Chrome
   // version from navigator.userAgent and read the platform from the page
   // globals, so every stealth surface agrees without a per-mode override.
+
+  // Secure-context gating per Chromium IDL [SecureContext]. These navigator
+  // attributes are undefined on non-secure origins (plain http, data:, opaque)
+  // in real Chrome, so an http page must not see them. Compute the flag the way
+  // Chrome does (https/wss/file, or http(s) on loopback) and remove the
+  // secure-only surfaces when insecure. Authoritative list from
+  // stealth/ch/*navigator*.idl: userAgentData, clipboard, credentials, login,
+  // serviceWorker, virtualKeyboard, xr carry [SecureContext]; usb/bluetooth/hid/
+  // serial/wakeLock/locks do NOT (present on http too).
+  (function() {
+    var href = (globalThis.location && globalThis.location.href) || '';
+    var secure = /^(https|wss|file):/i.test(href) ||
+                 /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[\/?#]|$)/i.test(href);
+    try {
+      Object.defineProperty(globalThis, 'isSecureContext', {
+        value: secure, writable: true, enumerable: true, configurable: true,
+      });
+    } catch(e) { try { globalThis.isSecureContext = secure; } catch(e2) {} }
+    if (!secure) {
+      // Every navigator attribute whose interface (or the attribute itself)
+      // carries [SecureContext] in the Chromium IDL. Derived from
+      // stealth/ch/*.idl: on plain http / data: these are all undefined in real
+      // Chrome. usb/bluetooth/hid/serial/xr/wakeLock/locks/keyboard/mediaDevices/
+      // gpu/ink all require a secure context (interface-level [SecureContext]).
+      var _drop = ['userAgentData', 'clipboard', 'credentials', 'login',
+                   'serviceWorker', 'virtualKeyboard', 'xr', 'usb', 'bluetooth',
+                   'hid', 'serial', 'wakeLock', 'locks', 'keyboard',
+                   'mediaDevices', 'gpu', 'ink'];
+      for (var i = 0; i < _drop.length; i++) {
+        var key = _drop[i], o = globalThis.navigator;
+        while (o && o !== Object.prototype) {
+          if (Object.prototype.hasOwnProperty.call(o, key)) {
+            try { delete o[key]; } catch(e) {}
+            break;
+          }
+          o = Object.getPrototypeOf(o);
+        }
+      }
+      // Interface objects of [SecureContext] interfaces are likewise absent
+      // from window on insecure origins.
+      var _dropCtors = ['USB', 'Bluetooth', 'XRSystem', 'XR'];
+      for (var j = 0; j < _dropCtors.length; j++) {
+        try { delete globalThis[_dropCtors[j]]; } catch(e) {}
+      }
+    }
+  })();
 
   // Hide internals (_*, obscura, Obscura). The set of keys is static at
   // snapshot-build time, so we precompute it ONCE below (after this
