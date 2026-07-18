@@ -3346,6 +3346,22 @@ globalThis.navigator = {
   attr(Bluetooth.prototype, 'referringDevice', function() { return null; });
   navSame('bluetooth', Object.create(Bluetooth.prototype));
 
+  // ---- Serial : EventTarget (§27, SecureContext) ----
+  var Serial = iface(function Serial() { throw new TypeError('Illegal constructor'); }, 'Serial', ETp);
+  op(Serial.prototype, 'getPorts', function getPorts() { return Promise.resolve([]); });
+  op(Serial.prototype, 'requestPort', _permissionDenied);
+  handler(Serial.prototype, 'onconnect');
+  handler(Serial.prototype, 'ondisconnect');
+  navSame('serial', Object.create(Serial.prototype));
+
+  // ---- HID : EventTarget (§29, SecureContext) ----
+  var HID = iface(function HID() { throw new TypeError('Illegal constructor'); }, 'HID', ETp);
+  op(HID.prototype, 'getDevices', function getDevices() { return Promise.resolve([]); });
+  op(HID.prototype, 'requestDevice', _permissionDenied);
+  handler(HID.prototype, 'onconnect');
+  handler(HID.prototype, 'ondisconnect');
+  navSame('hid', Object.create(HID.prototype));
+
   // ---- MediaSession (§36, not SecureContext) ----
   var MediaSession = iface(function MediaSession() { throw new TypeError('Illegal constructor'); }, 'MediaSession', null);
   var _msMeta = new WeakMap(), _msState = new WeakMap();
@@ -6050,6 +6066,10 @@ _markNative(globalThis.Selection);
   navigator.serviceWorker?.register,
   navigator.permissions?.query, navigator.credentials?.get,
   navigator.storage?.estimate, navigator.storage?.persist, navigator.storage?.persisted,
+  navigator.mediaDevices?.enumerateDevices, navigator.mediaDevices?.getUserMedia,
+  navigator.mediaDevices?.getDisplayMedia, navigator.mediaDevices?.getSupportedConstraints,
+  navigator.clipboard?.writeText, navigator.clipboard?.readText,
+  navigator.clipboard?.write, navigator.clipboard?.read,
   globalThis.fetch, globalThis.matchMedia, globalThis.getComputedStyle,
   globalThis.getSelection, globalThis.requestAnimationFrame,
   globalThis.cancelAnimationFrame, globalThis.setTimeout, globalThis.clearTimeout,
@@ -8110,7 +8130,7 @@ globalThis.__obscura_init = function() {
       }
       // Interface objects of [SecureContext] interfaces are likewise absent
       // from window on insecure origins.
-      var _dropCtors = ['USB', 'Bluetooth', 'XRSystem', 'XR'];
+      var _dropCtors = ['USB', 'Bluetooth', 'XRSystem', 'XR', 'Serial', 'HID'];
       for (var j = 0; j < _dropCtors.length; j++) {
         try { delete globalThis[_dropCtors[j]]; } catch(e) {}
       }
