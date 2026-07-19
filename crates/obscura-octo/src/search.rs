@@ -81,7 +81,16 @@ pub async fn run_search(
         took_ms: start.elapsed().as_millis() as u64,
         error,
     };
-    if let Ok(v) = serde_json::to_value(&resp) {
+    // The summary handed to `finish` is the aggregate for the trailing NDJSON
+    // line / WS `summary` frame — NOT a second copy of every result. The results
+    // are already streamed via `emit`, so we drop the `results` array here and
+    // replace it with a `count`; keeping it would duplicate all scraped text and
+    // double the output size. Full-response consumers use the returned `resp`.
+    if let Ok(mut v) = serde_json::to_value(&resp) {
+        if let Some(map) = v.as_object_mut() {
+            map.remove("results");
+            map.insert("count".to_string(), serde_json::json!(resp.results.len()));
+        }
         sink.finish(&v);
     }
     resp

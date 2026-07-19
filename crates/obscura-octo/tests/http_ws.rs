@@ -86,8 +86,11 @@ fn http_search_ndjson_streams_records() {
         let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
         // 2 result records + 1 summary line.
         assert_eq!(lines.len(), 3);
+        // The summary line carries aggregate metadata only — a `count`, not a
+        // second copy of the streamed results.
         let last: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
-        assert_eq!(last["results"].as_array().unwrap().len(), 2);
+        assert!(last.get("results").is_none());
+        assert_eq!(last["count"].as_u64().unwrap(), 2);
     });
 }
 

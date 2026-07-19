@@ -8,7 +8,10 @@ use serde_json::Value;
 pub trait OutputSink {
     /// One search result, as soon as it is produced.
     fn emit(&mut self, record: &Value);
-    /// The aggregate response, once, after the last `emit`.
+    /// The aggregate summary, once, after the last `emit`: response metadata
+    /// (query, engine, count, took_ms, error) WITHOUT the `results` array, which
+    /// was already streamed via `emit`. Used as the trailing NDJSON line / WS
+    /// `summary` frame. Full-response callers use the returned `SearchResponse`.
     fn finish(&mut self, summary: &Value) {
         let _ = summary;
     }
