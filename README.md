@@ -190,6 +190,9 @@ obscura warmup --minutes 10 --session ./sess --url https://example.com --url htt
 
 # Then reuse it anywhere
 obscura search "..." --engine bing --session ~/.obscura/session
+
+# Inspect a session without opening cookies.json
+obscura session-info --session ~/.obscura/session
 ```
 
 ### Monitor pages for changes
@@ -432,6 +435,15 @@ Mature a reusable browser session by really browsing an engine for a while.
 | `--query` | generic set | Seed query to browse (repeatable) |
 | `--url` | — | Target URL to visit directly, to mature cookies on that site too (repeatable) |
 | `--proxy` | — | HTTP/SOCKS5 proxy URL |
+
+### `obscura session-info`
+
+Summarize a saved `--session` without opening cookies.json.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--session` | — (required) | The session directory (contains cookies.json) |
+| `--top` | `15` | How many top domains to list |
 
 ### `obscura monitor <URL>`
 

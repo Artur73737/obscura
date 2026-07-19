@@ -22,6 +22,7 @@ COMMANDS:
   octo-serve  Expose `search` over HTTP (POST /search) and WebSocket.
   monitor     Watch a page and emit changes (NDJSON, or HTTP/WS stream).
   warmup      Browse an engine for a while to mature a reusable --session.
+  session-info  Summarize a saved --session (cookies, top domains, age).
 
 SAVE TO FILE: every command that prints output takes `-o/--output <PATH>`, e.g.
   obscura search \"rust\" --format ndjson -o C:\\tmp\\out.ndjson
@@ -369,6 +370,22 @@ Then reuse it:  obscura search \"...\" --engine bing --session ~/.obscura/sessio
         url: Vec<String>,
     },
 
+    /// Print a summary of a saved --session (cookie count, top domains, age)
+    /// so you don't have to open cookies.json by hand.
+    #[command(after_help = "\
+EXAMPLES:
+  obscura session-info --session ~/.obscura/session
+  obscura session-info --session ./sess --top 20")]
+    SessionInfo {
+        /// The session directory used with --session (contains cookies.json).
+        #[arg(long)]
+        session: std::path::PathBuf,
+
+        /// How many top domains to list.
+        #[arg(long, default_value_t = 15)]
+        top: usize,
+    },
+
     /// Watch a page and emit a change whenever a watched value changes.
     /// Prints NDJSON (or serves it over HTTP `GET /last` + WS `/events`).
     #[command(after_help = "\
@@ -667,6 +684,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Command::Warmup { engine, minutes, session, query, url }) => {
             run_warmup(engine, minutes, session, query, url, global_proxy, args.allow_private_network).await?;
+        }
+        Some(Command::SessionInfo { session, top }) => {
+            run_session_info(session, top)?;
         }
         Some(Command::Monitor { url, selector, condition, on_change, interval, timeout, wait, max_runs, min_change_interval, save_to, serve, ws_port, token, session }) => {
             let req = obscura_octo::MonitorRequest {
@@ -1777,6 +1797,77 @@ async fn run_warmup(
         stats.elapsed_secs,
         session.display()
     );
+    Ok(())
+}
+
+/// Print a human summary of a saved session's cookie jar, so the user doesn't
+/// have to read cookies.json. Reads the file the browser writes on --session.
+fn run_session_info(session: std::path::PathBuf, top: usize) -> anyhow::Result<()> {
+    let path = session.join("cookies.json");
+    if !path.exists() {
+        anyhow::bail!("no session found at {} (run `warmup` or a `search --session` first)", path.display());
+    }
+    let data = std::fs::read_to_string(&path)?;
+    let cookies: Vec<serde_json::Value> = serde_json::from_str(&data)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let mut per_domain: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut session_cookies = 0usize;
+    let mut persistent = 0usize;
+    let mut secure = 0usize;
+    let mut expired = 0usize;
+    for c in &cookies {
+        let dom = c.get("domain").and_then(|v| v.as_str()).unwrap_or("?").trim_start_matches('.').to_string();
+        *per_domain.entry(dom).or_default() += 1;
+        match c.get("expires").and_then(|v| v.as_i64()) {
+            Some(exp) => {
+                persistent += 1;
+                if exp < now {
+                    expired += 1;
+                }
+            }
+            None => session_cookies += 1,
+        }
+        if c.get("secure").and_then(|v| v.as_bool()).unwrap_or(false) {
+            secure += 1;
+        }
+    }
+
+    // Age from the file's mtime (last write = last navigation that saved it).
+    let age = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .map(|d| {
+            let s = d.as_secs();
+            if s < 90 { format!("{s}s ago") }
+            else if s < 5400 { format!("{}m ago", s / 60) }
+            else if s < 172800 { format!("{}h ago", s / 3600) }
+            else { format!("{}d ago", s / 86400) }
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    println!("session: {}", session.display());
+    println!("last updated: {age}");
+    println!(
+        "cookies: {} total ({} domains) — {persistent} persistent, {session_cookies} session, {secure} secure, {expired} expired",
+        cookies.len(),
+        per_domain.len(),
+    );
+
+    let mut domains: Vec<(String, usize)> = per_domain.into_iter().collect();
+    domains.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    println!("top domains:");
+    for (dom, n) in domains.iter().take(top) {
+        println!("  {n:>3}  {dom}");
+    }
+    if domains.len() > top {
+        println!("  ... and {} more", domains.len() - top);
+    }
     Ok(())
 }
 
