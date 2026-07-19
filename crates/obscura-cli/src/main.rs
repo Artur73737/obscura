@@ -343,6 +343,7 @@ MCP tool `octo_search`.")]
 EXAMPLES:
   obscura warmup --engine bing --minutes 15 --session ~/.obscura/session
   obscura warmup --engine duckduckgo --minutes 5 --session ./sess --query \"rust jobs\"
+  obscura warmup --minutes 10 --session ./sess --url https://example.com --url https://news.ycombinator.com
 
 Then reuse it:  obscura search \"...\" --engine bing --session ~/.obscura/session")]
     Warmup {
@@ -361,6 +362,11 @@ Then reuse it:  obscura search \"...\" --engine bing --session ~/.obscura/sessio
         /// Seed query to browse (repeatable). Defaults to a generic set.
         #[arg(long)]
         query: Vec<String>,
+
+        /// Target URL to visit directly, to mature cookies on that site too
+        /// (repeatable).
+        #[arg(long)]
+        url: Vec<String>,
     },
 
     /// Watch a page and emit a change whenever a watched value changes.
@@ -659,8 +665,8 @@ async fn main() -> anyhow::Result<()> {
             );
             obscura_octo::server::run(&host, port, ws_port, fetcher, token).await?;
         }
-        Some(Command::Warmup { engine, minutes, session, query }) => {
-            run_warmup(engine, minutes, session, query, global_proxy, args.allow_private_network).await?;
+        Some(Command::Warmup { engine, minutes, session, query, url }) => {
+            run_warmup(engine, minutes, session, query, url, global_proxy, args.allow_private_network).await?;
         }
         Some(Command::Monitor { url, selector, condition, on_change, interval, timeout, wait, max_runs, min_change_interval, save_to, serve, ws_port, token, session }) => {
             let req = obscura_octo::MonitorRequest {
@@ -1733,6 +1739,7 @@ async fn run_warmup(
     minutes: f64,
     session: std::path::PathBuf,
     queries: Vec<String>,
+    urls: Vec<String>,
     proxy: Option<String>,
     allow_private_network: bool,
 ) -> anyhow::Result<()> {
@@ -1756,6 +1763,7 @@ async fn run_warmup(
         engine,
         minutes,
         &queries,
+        &urls,
         &fetcher,
         Some(&mut progress),
     )

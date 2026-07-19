@@ -35,14 +35,16 @@ const SEED_QUERIES: &[&str] = &[
 pub type Progress<'a> = dyn FnMut(u64, u64, &str) + 'a;
 
 /// Warm a session on `engine` for `minutes`, optionally seeded with the caller's
-/// own `queries` (else a built-in generic set). Navigates real SERPs and opens a
-/// couple of results per query, pausing naturally between requests, until the
-/// budget elapses. The fetcher must be built with a `--session` dir so its jar is
+/// own `queries` (else a built-in generic set) and a list of target `urls` to
+/// visit directly. Navigates real SERPs and opens a couple of results per query,
+/// visits each target URL, pausing naturally between requests, until the budget
+/// elapses. The fetcher must be built with a `--session` dir so its jar is
 /// persisted after each navigation.
 pub async fn run_warmup(
     engine: Engine,
     minutes: f64,
     queries: &[String],
+    urls: &[String],
     fetcher: &dyn Fetcher,
     mut progress: Option<&mut Progress<'_>>,
 ) -> WarmupStats {
@@ -60,6 +62,7 @@ pub async fn run_warmup(
 
     let mut stats = WarmupStats::default();
     let mut qi = 0usize;
+    let mut ui = 0usize;
 
     let report = |progress: &mut Option<&mut Progress<'_>>, start: Instant, msg: &str| {
         if let Some(cb) = progress.as_mut() {
@@ -70,6 +73,24 @@ pub async fn run_warmup(
     let start = Instant::now();
 
     while Instant::now() < deadline {
+        // Interleave a direct target-URL visit between search sessions so those
+        // sites accumulate their own real cookies within the budget.
+        if !urls.is_empty() {
+            let target = &urls[ui % urls.len()];
+            ui += 1;
+            report(&mut progress, start, &format!("visit: {target}"));
+            match fetcher.fetch(target, warm_opts(None)).await {
+                Ok(_) => stats.pages += 1,
+                Err(e) => {
+                    stats.errors += 1;
+                    tracing::debug!("warmup visit error: {e}");
+                }
+            }
+            if sleep_until("browse target", human_pause(4, 12), deadline).await {
+                break;
+            }
+        }
+
         let query = &list[qi % list.len()];
         qi += 1;
 

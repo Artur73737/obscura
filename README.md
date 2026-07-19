@@ -185,6 +185,9 @@ obscura warmup --engine bing --minutes 15 --session ~/.obscura/session
 # Optionally seed with your own queries
 obscura warmup --engine duckduckgo --minutes 5 --session ./sess --query "rust jobs"
 
+# Or also visit specific target sites to mature their cookies too
+obscura warmup --minutes 10 --session ./sess --url https://example.com --url https://news.ycombinator.com
+
 # Then reuse it anywhere
 obscura search "..." --engine bing --session ~/.obscura/session
 ```
@@ -427,6 +430,7 @@ Mature a reusable browser session by really browsing an engine for a while.
 | `--minutes` | `15` | How long to browse |
 | `--session` | — (required) | Directory to save the session (cookies) into |
 | `--query` | generic set | Seed query to browse (repeatable) |
+| `--url` | — | Target URL to visit directly, to mature cookies on that site too (repeatable) |
 | `--proxy` | — | HTTP/SOCKS5 proxy URL |
 
 ### `obscura monitor <URL>`
