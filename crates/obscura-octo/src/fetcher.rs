@@ -51,6 +51,11 @@ pub trait Fetcher {
 pub struct PageFetcher {
     context: std::sync::Arc<obscura_browser::BrowserContext>,
     user_agent: Option<String>,
+    /// When set, cookies are loaded from `{dir}/cookies.json` at construction and
+    /// written back by `save_session()`. This is the "warm session": the same
+    /// real cookies/history carry across separate runs, which is a legitimate
+    /// trust signal (a returning visitor) rather than a fabricated one.
+    session_dir: Option<std::path::PathBuf>,
 }
 
 impl PageFetcher {
@@ -65,7 +70,18 @@ impl PageFetcher {
         user_agent: Option<String>,
         allow_private_network: bool,
     ) -> Self {
-        Self::new(proxy, true, user_agent, allow_private_network)
+        Self::new(proxy, true, user_agent, allow_private_network, None)
+    }
+
+    /// Like `hidden_chrome`, but persists the cookie jar under `session_dir` so a
+    /// real browsing session matures across runs (see the `session_dir` field).
+    pub fn hidden_chrome_session(
+        proxy: Option<String>,
+        user_agent: Option<String>,
+        allow_private_network: bool,
+        session_dir: Option<std::path::PathBuf>,
+    ) -> Self {
+        Self::new(proxy, true, user_agent, allow_private_network, session_dir)
     }
 
     pub fn new(
@@ -73,16 +89,31 @@ impl PageFetcher {
         stealth: bool,
         user_agent: Option<String>,
         allow_private_network: bool,
+        session_dir: Option<std::path::PathBuf>,
     ) -> Self {
+        // Ensure the session dir exists so the first run can save into it.
+        if let Some(ref dir) = session_dir {
+            let _ = std::fs::create_dir_all(dir);
+        }
         let context = std::sync::Arc::new(obscura_browser::BrowserContext::with_storage_and_network(
             "octo-search".to_string(),
             proxy,
             stealth,
             user_agent.clone(),
-            None,
+            session_dir.clone(),
             allow_private_network,
         ));
-        PageFetcher { context, user_agent }
+        PageFetcher { context, user_agent, session_dir }
+    }
+
+    /// Persist the current cookie jar to `{session_dir}/cookies.json`. No-op when
+    /// no session dir was configured. Call once after a run so the session the
+    /// engines built up (consent, preference, and rate/reputation cookies) is
+    /// there for the next invocation.
+    pub fn save_session(&self) {
+        if self.session_dir.is_some() {
+            self.context.save_cookies();
+        }
     }
 }
 

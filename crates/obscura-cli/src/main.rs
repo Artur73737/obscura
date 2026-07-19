@@ -232,12 +232,16 @@ EXAMPLES:
   obscura search \"climate report\" --site nature.com --site nasa.gov
   obscura search \"rust tokio\" --depth page --scrape text --format ndjson -o out.ndjson
   obscura search \"q\" --engine custom --engine-url \"https://searx.be/search?q={query}\"
+  obscura search \"rust jobs\" --engine bing --session ~/.obscura/session
 
 DEPTH:  serp = SERP links only | page = also scrape each result | deep = follow
         one level of same-host links. SCRAPE: none|text|html|links.
 --max-results is a CEILING: the count returned depends on how many distinct
 results the engine yields (pages are fetched until the ceiling or the engine
 runs out). To get page CONTENT, add `--depth page --scrape text`.
+--session DIR keeps the browser's cookie jar between runs, so the engine sees a
+returning visitor with real history instead of a cold one — a legitimate trust
+signal that tends to raise anti-bot scores. Nothing is fabricated.
 The same search is available over HTTP/WS via `obscura octo-serve`, and as the
 MCP tool `octo_search`.")]
     Search {
@@ -300,6 +304,14 @@ MCP tool `octo_search`.")]
 
         #[arg(long, short = 'o')]
         output: Option<std::path::PathBuf>,
+
+        /// Persist the browser session (cookies) in this directory and reuse it
+        /// on the next run. A real, maturing session — consent and preference
+        /// cookies, a returning-visitor history — is a legitimate trust signal
+        /// with engines. Nothing is fabricated; it is the same jar Obscura built
+        /// while actually browsing.
+        #[arg(long)]
+        session: Option<std::path::PathBuf>,
     },
 
     /// Serve the octo features (search) over HTTP and WebSocket.
@@ -596,11 +608,11 @@ async fn main() -> anyhow::Result<()> {
                 obscura_mcp::run(mcp_proxy, user_agent, stealth).await?;
             }
         }
-        Some(Command::Search { query, engine, max_results, lang, site, exclude_site, site_exact, depth, scrape, format, eval, wait, timeout, concurrency, fallback, engine_url, output }) => {
+        Some(Command::Search { query, engine, max_results, lang, site, exclude_site, site_exact, depth, scrape, format, eval, wait, timeout, concurrency, fallback, engine_url, output, session }) => {
             run_octo_search(
                 query, engine, max_results, lang, site, exclude_site, site_exact, depth, scrape,
                 format, eval, wait, timeout, concurrency, fallback, engine_url, output,
-                global_proxy, stealth, args.allow_private_network,
+                global_proxy, stealth, args.allow_private_network, session,
             ).await?;
         }
         Some(Command::OctoServe { host, port, ws_port, token }) => {
@@ -1612,6 +1624,7 @@ async fn run_octo_search(
     proxy: Option<String>,
     stealth: bool,
     allow_private_network: bool,
+    session: Option<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
     let req = obscura_octo::SearchRequest {
         query,
@@ -1635,9 +1648,16 @@ async fn run_octo_search(
     // Obscura's search always drives a real, hidden Chrome identity (stealth on)
     // regardless of the global --stealth flag: automated but real navigation.
     let _ = stealth;
-    let fetcher = obscura_octo::PageFetcher::hidden_chrome(proxy, None, allow_private_network);
+    let fetcher = obscura_octo::PageFetcher::hidden_chrome_session(
+        proxy,
+        None,
+        allow_private_network,
+        session,
+    );
     let mut sink = obscura_octo::CollectSink::default();
     let resp = obscura_octo::run_search(&req, &fetcher, &mut sink).await;
+    // Persist the session the engines built up so the next run starts warm.
+    fetcher.save_session();
 
     let rendered = match format.trim().to_ascii_lowercase().as_str() {
         "json" => serde_json::to_string_pretty(&resp)?,
