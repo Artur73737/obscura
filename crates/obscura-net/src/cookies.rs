@@ -177,6 +177,14 @@ impl CookieJar {
                 if !path_matches(path, &entry.path) {
                     continue;
                 }
+                // Skip cookies whose name/value carry bytes that are illegal in
+                // an HTTP header (control chars, newlines). A stored junk value
+                // — e.g. a site that did `document.cookie = <error message>` —
+                // would otherwise make the whole Cookie header unparseable and
+                // fail every request to that host.
+                if !is_header_safe(&entry.name) || !is_header_safe(&entry.value) {
+                    continue;
+                }
                 matching.push(format!("{}={}", entry.name, entry.value));
             }
         }
@@ -263,6 +271,14 @@ impl CookieJar {
                     continue;
                 }
                 if !path_matches(path, &entry.path) {
+                    continue;
+                }
+                // Skip cookies whose name/value carry bytes that are illegal in
+                // an HTTP header (control chars, newlines). A stored junk value
+                // — e.g. a site that did `document.cookie = <error message>` —
+                // would otherwise make the whole Cookie header unparseable and
+                // fail every request to that host.
+                if !is_header_safe(&entry.name) || !is_header_safe(&entry.value) {
                     continue;
                 }
                 matching.push(format!("{}={}", entry.name, entry.value));
@@ -601,6 +617,12 @@ fn path_matches(request_path: &str, cookie_path: &str) -> bool {
     cookie_path.ends_with('/') || request_path.as_bytes().get(cookie_path.len()) == Some(&b'/')
 }
 
+/// True if `s` is safe to place in an HTTP header value: printable ASCII/UTF-8
+/// with no control characters (notably no CR/LF, which would break the header).
+fn is_header_safe(s: &str) -> bool {
+    !s.bytes().any(|b| b < 0x20 || b == 0x7f)
+}
+
 fn domain_matches(host: &str, domain: &str) -> bool {
     // Avoid allocations on the hot path. Cookie lookup runs per fetch
     // (every subresource on a page) and walks every domain in the jar.
@@ -636,6 +658,41 @@ mod tests {
 
         let header = jar.get_cookie_header(&url);
         assert!(header.contains("session=abc123"));
+    }
+
+    #[test]
+    fn header_skips_cookies_with_control_chars() {
+        let jar = CookieJar::new();
+        let url = Url::parse("https://example.com/").unwrap();
+        // A well-formed cookie, and a junk one carrying a newline in its value
+        // (as a broken site can set via document.cookie).
+        jar.set_cookies_from_cdp(vec![
+            CookieInfo {
+                name: "good".into(),
+                value: "ok".into(),
+                domain: "example.com".into(),
+                path: "/".into(),
+                secure: false,
+                http_only: false,
+                same_site: String::new(),
+                expires: None,
+            },
+            CookieInfo {
+                name: "SG_SS".into(),
+                value: "E:T is not a function\n    at x".into(),
+                domain: "example.com".into(),
+                path: "/".into(),
+                secure: false,
+                http_only: false,
+                same_site: String::new(),
+                expires: None,
+            },
+        ]);
+        let header = jar.get_cookie_header(&url);
+        assert!(header.contains("good=ok"));
+        assert!(!header.contains("SG_SS"), "junk cookie must be skipped: {header:?}");
+        // The resulting header must be valid.
+        assert!(is_header_safe(&header));
     }
 
     #[test]
