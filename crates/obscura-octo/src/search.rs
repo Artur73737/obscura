@@ -164,7 +164,8 @@ async fn fetch_serp(
         // Treat an anti-bot / captcha page as "no results" up front: its markup
         // can still contain a stray parseable link that would otherwise suppress
         // the fallback and leave the caller with a silent empty set.
-        let blocked = looks_blocked(&fetched.html);
+        let block = classify_block(&fetched.html, &fetched.final_url);
+        let blocked = block.is_some();
         let raws = if blocked {
             Vec::new()
         } else {
@@ -187,14 +188,8 @@ async fn fetch_serp(
             // served an anti-bot page, say so with the ways out instead of
             // returning a silent empty result set.
             if page_idx == 0 && collected.is_empty() {
-                if blocked {
-                    return Err(format!(
-                        "engine {:?} returned an anti-bot / captcha page. DuckDuckGo works without \
-                         stealth; Bing works with a stealth build (--features stealth); Google \
-                         additionally IP-reputation blocks with reCAPTCHA, so it needs a clean \
-                         residential --proxy. Add --fallback duckduckgo to auto-recover.",
-                        engine
-                    ));
+                if let Some(block) = block {
+                    return Err(block.describe(engine));
                 }
                 // A real results page with zero parseable results: either the
                 // query genuinely has none, or the engine soft-throttled this IP
@@ -248,21 +243,164 @@ async fn fetch_serp(
     Ok((collected, base))
 }
 
-/// Heuristic: does this SERP HTML look like an anti-bot / consent wall rather
-/// than a real results page? Google ("unusual traffic") and Bing (captcha)
-/// serve these to clients they do not trust.
-fn looks_blocked(html: &str) -> bool {
+/// The kind of wall an engine served instead of results. Naming the mechanism
+/// lets the caller know whether it is a solvable challenge (image grid), an
+/// invisible score check, or an IP-reputation block that no browser tweak fixes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockKind {
+    /// reCAPTCHA v2 — the visible checkbox / "select all images" grid.
+    RecaptchaV2,
+    /// reCAPTCHA v3 / invisible — a background score, no user challenge.
+    RecaptchaV3,
+    /// hCaptcha — visible image-grid challenge.
+    HCaptcha,
+    /// Google `/sorry/` "unusual traffic" interstitial (usually reCAPTCHA-backed).
+    GoogleSorry,
+    /// Cloudflare "Just a moment" / "checking your browser" JS challenge.
+    CloudflareChallenge,
+    /// A cookie/consent wall shown before results (not a bot check).
+    ConsentWall,
+    /// A generic captcha/anti-bot page we could not attribute more precisely.
+    UnknownCaptcha,
+}
+
+impl BlockKind {
+    fn label(self) -> &'static str {
+        match self {
+            BlockKind::RecaptchaV2 => "reCAPTCHA v2 (visible checkbox / image-grid challenge)",
+            BlockKind::RecaptchaV3 => "reCAPTCHA v3 (invisible score, no image grid)",
+            BlockKind::HCaptcha => "hCaptcha (visible image-grid challenge)",
+            BlockKind::GoogleSorry => "Google \"unusual traffic\" interstitial (/sorry/, reCAPTCHA-backed)",
+            BlockKind::CloudflareChallenge => "Cloudflare JS challenge (\"Just a moment\")",
+            BlockKind::ConsentWall => "cookie/consent wall (not a bot check)",
+            BlockKind::UnknownCaptcha => "generic anti-bot / captcha page",
+        }
+    }
+}
+
+/// A classified wall plus the most likely reason it fired.
+#[derive(Debug, Clone)]
+pub struct BlockInfo {
+    pub kind: BlockKind,
+    /// Short, human reason (IP reputation, TLS fingerprint, rate-limit, ...).
+    pub reason: &'static str,
+}
+
+impl BlockInfo {
+    /// The user-facing error: what wall it is, why it most likely triggered,
+    /// and how to recover.
+    fn describe(&self, engine: crate::schema::Engine) -> String {
+        let recover = match self.kind {
+            BlockKind::ConsentWall => {
+                "This is a consent screen, not a bot block. Try --engine duckduckgo, \
+                 or a region/--lang that does not gate results behind consent."
+            }
+            BlockKind::RecaptchaV3 | BlockKind::GoogleSorry => {
+                "Score/IP-reputation blocks do not clear by tweaking the browser: \
+                 use a clean residential --proxy, and add --fallback duckduckgo to auto-recover."
+            }
+            _ => {
+                "DuckDuckGo works without stealth; Bing works with a stealth build \
+                 (--features stealth). For Google use a residential --proxy, and add \
+                 --fallback duckduckgo to auto-recover."
+            }
+        };
+        format!(
+            "engine {engine:?} served a wall instead of results.\n  \
+             captcha type: {}\n  \
+             likely reason: {}\n  \
+             recover: {}",
+            self.kind.label(),
+            self.reason,
+            recover
+        )
+    }
+}
+
+/// Inspect a SERP page and, if it is a wall rather than results, classify the
+/// captcha mechanism and infer why it fired. Ordered most-specific first so a
+/// page that carries several markers is attributed to its strongest signal.
+fn classify_block(html: &str, final_url: &str) -> Option<BlockInfo> {
     let lower = html.to_ascii_lowercase();
-    const MARKERS: &[&str] = &[
-        "unusual traffic",
-        "/sorry/",
-        "recaptcha",
-        "captcha",
-        "verify you are human",
-        "are you a robot",
-        "enablejs",
-    ];
-    MARKERS.iter().any(|m| lower.contains(m))
+    let url = final_url.to_ascii_lowercase();
+    let has = |m: &str| lower.contains(m);
+
+    // Google "unusual traffic" — the redirect to /sorry/ is the clearest tell,
+    // and it is IP-reputation driven (datacenter/VPN ranges), not fingerprint.
+    if url.contains("/sorry/") || has("unusual traffic") || has("our systems have detected") {
+        return Some(BlockInfo {
+            kind: BlockKind::GoogleSorry,
+            reason: "this IP's reputation (datacenter/VPN range or a burst of \
+                     queries) tripped Google's rate/abuse check — not a browser-fingerprint issue",
+        });
+    }
+
+    // reCAPTCHA: v3/invisible loads the api with ?render=<sitekey> or calls
+    // grecaptcha.execute; v2 renders a widget (g-recaptcha / api2 / the prompt).
+    let recaptcha = has("recaptcha") || has("grecaptcha");
+    if recaptcha {
+        let v3 = has("render=") || has("grecaptcha.execute") || has("recaptcha/api.js?render");
+        let v2 = has("g-recaptcha")
+            || has("/recaptcha/api2")
+            || has("i'm not a robot")
+            || has("select all images");
+        if v3 && !v2 {
+            return Some(BlockInfo {
+                kind: BlockKind::RecaptchaV3,
+                reason: "an invisible behavioral score came back too low: cold session \
+                         (no cookie/history), no human input signals, or a flagged IP",
+            });
+        }
+        return Some(BlockInfo {
+            kind: BlockKind::RecaptchaV2,
+            reason: "the client was distrusted enough to demand an interactive challenge, \
+                     usually IP reputation combined with a cold, historyless session",
+        });
+    }
+
+    if has("hcaptcha") || has("h-captcha") {
+        return Some(BlockInfo {
+            kind: BlockKind::HCaptcha,
+            reason: "the site's anti-bot provider distrusted this client — typically \
+                     IP reputation or request velocity",
+        });
+    }
+
+    // Cloudflare interstitial before the real page.
+    if has("just a moment")
+        || has("checking your browser")
+        || has("cf-chl")
+        || has("cf_chl")
+        || (has("cloudflare") && has("challenge"))
+    {
+        return Some(BlockInfo {
+            kind: BlockKind::CloudflareChallenge,
+            reason: "Cloudflare issued a JS/interstitial challenge, driven by IP \
+                     reputation or a managed-challenge rule on the zone",
+        });
+    }
+
+    // Consent / cookie wall (common on google.* in the EU) shown before results.
+    if (has("before you continue") || has("consent") || has("accept all"))
+        && (url.contains("consent.") || has("cookies"))
+    {
+        return Some(BlockInfo {
+            kind: BlockKind::ConsentWall,
+            reason: "a regional cookie/consent gate is being shown before results \
+                     (common on google.* in the EU)",
+        });
+    }
+
+    // Generic fallbacks: a captcha page we could not attribute precisely.
+    if has("captcha") || has("verify you are human") || has("are you a robot") || has("enablejs") {
+        return Some(BlockInfo {
+            kind: BlockKind::UnknownCaptcha,
+            reason: "the engine served an anti-bot page; the most common cause is IP \
+                     reputation or request velocity from this address",
+        });
+    }
+
+    None
 }
 
 async fn scrape_into(
@@ -426,5 +564,63 @@ fn scrape_html(html: &str, kind: ScrapeKind, base: Option<&Url>) -> ScrapeData {
 fn emit(sink: &mut dyn OutputSink, result: &SearchResult) {
     if let Ok(v) = serde_json::to_value(result) {
         sink.emit(&v);
+    }
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::{classify_block, BlockKind};
+
+    #[test]
+    fn google_sorry_is_ip_reputation() {
+        let b = classify_block("... Our systems have detected unusual traffic ...", "https://www.google.com/sorry/index?continue=x").unwrap();
+        assert_eq!(b.kind, BlockKind::GoogleSorry);
+        assert!(b.reason.contains("reputation"));
+    }
+
+    #[test]
+    fn recaptcha_v3_is_invisible_score() {
+        let html = r#"<script src="https://www.google.com/recaptcha/api.js?render=6Lxyz"></script><script>grecaptcha.execute()</script>"#;
+        let b = classify_block(html, "https://example.com/").unwrap();
+        assert_eq!(b.kind, BlockKind::RecaptchaV3);
+    }
+
+    #[test]
+    fn recaptcha_v2_is_visible_grid() {
+        let html = r#"<div class="g-recaptcha" data-sitekey="k"></div> please select all images"#;
+        let b = classify_block(html, "https://example.com/").unwrap();
+        assert_eq!(b.kind, BlockKind::RecaptchaV2);
+    }
+
+    #[test]
+    fn hcaptcha_detected() {
+        let b = classify_block(r#"<div class="h-captcha"></div>"#, "https://example.com/").unwrap();
+        assert_eq!(b.kind, BlockKind::HCaptcha);
+    }
+
+    #[test]
+    fn cloudflare_challenge_detected() {
+        let b = classify_block("<title>Just a moment...</title> checking your browser", "https://example.com/").unwrap();
+        assert_eq!(b.kind, BlockKind::CloudflareChallenge);
+    }
+
+    #[test]
+    fn consent_wall_detected() {
+        let b = classify_block("Before you continue to Google — we use cookies. Accept all?", "https://consent.google.com/").unwrap();
+        assert_eq!(b.kind, BlockKind::ConsentWall);
+    }
+
+    #[test]
+    fn real_results_are_not_blocked() {
+        assert!(classify_block("<html><body><a href=\"https://x.com\">A result</a></body></html>", "https://duckduckgo.com/").is_none());
+    }
+
+    #[test]
+    fn describe_names_type_and_reason() {
+        let b = classify_block("recaptcha unusual traffic", "https://google.com/sorry/").unwrap();
+        let msg = b.describe(crate::schema::Engine::Google);
+        assert!(msg.contains("captcha type:"));
+        assert!(msg.contains("likely reason:"));
+        assert!(msg.contains("recover:"));
     }
 }
