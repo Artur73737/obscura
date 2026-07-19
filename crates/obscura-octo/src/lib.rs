@@ -12,6 +12,7 @@ pub mod schema;
 pub mod search;
 pub mod security;
 pub mod server;
+pub mod warmup;
 
 pub use fetcher::{FetchOpts, FetchedPage, Fetcher, PageFetcher};
 // Re-export so callers can flip a build to the stealth feature in one place.
@@ -23,3 +24,4 @@ pub use schema::{
     SearchRequest, SearchResponse, SearchResult,
 };
 pub use search::run_search;
+pub use warmup::{run_warmup, WarmupStats};

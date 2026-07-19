@@ -21,6 +21,7 @@ COMMANDS:
   search      Web search (duckduckgo/google/bing/custom) + optional scraping.
   octo-serve  Expose `search` over HTTP (POST /search) and WebSocket.
   monitor     Watch a page and emit changes (NDJSON, or HTTP/WS stream).
+  warmup      Browse an engine for a while to mature a reusable --session.
 
 SAVE TO FILE: every command that prints output takes `-o/--output <PATH>`, e.g.
   obscura search \"rust\" --format ndjson -o C:\\tmp\\out.ndjson
@@ -329,6 +330,37 @@ MCP tool `octo_search`.")]
         /// Bearer token required when binding a non-loopback host.
         #[arg(long)]
         token: Option<String>,
+
+        /// Persist/reuse the browser session (cookies) in this directory.
+        #[arg(long)]
+        session: Option<std::path::PathBuf>,
+    },
+
+    /// Warm up a browser session by really browsing an engine for a while, then
+    /// save it for reuse. Genuine navigation (searches + opening results) that
+    /// matures a real cookie jar — a legitimate returning-visitor trust signal.
+    #[command(after_help = "\
+EXAMPLES:
+  obscura warmup --engine bing --minutes 15 --session ~/.obscura/session
+  obscura warmup --engine duckduckgo --minutes 5 --session ./sess --query \"rust jobs\"
+
+Then reuse it:  obscura search \"...\" --engine bing --session ~/.obscura/session")]
+    Warmup {
+        /// google | bing | duckduckgo
+        #[arg(long, default_value = "bing")]
+        engine: String,
+
+        /// How long to browse, in minutes.
+        #[arg(long, default_value_t = 15.0)]
+        minutes: f64,
+
+        /// Directory to save the session (cookies) into. Required.
+        #[arg(long)]
+        session: std::path::PathBuf,
+
+        /// Seed query to browse (repeatable). Defaults to a generic set.
+        #[arg(long)]
+        query: Vec<String>,
     },
 
     /// Watch a page and emit a change whenever a watched value changes.
@@ -390,6 +422,10 @@ condition/on-change are JS run with the watched element in scope (bare
         /// Bearer token required when --serve binds a non-loopback host.
         #[arg(long)]
         token: Option<String>,
+
+        /// Persist/reuse the browser session (cookies) in this directory.
+        #[arg(long)]
+        session: Option<std::path::PathBuf>,
     },
 }
 
@@ -615,15 +651,18 @@ async fn main() -> anyhow::Result<()> {
                 global_proxy, stealth, args.allow_private_network, session,
             ).await?;
         }
-        Some(Command::OctoServe { host, port, ws_port, token }) => {
+        Some(Command::OctoServe { host, port, ws_port, token, session }) => {
             let ws_port = ws_port.unwrap_or(port + 1);
             let _ = stealth;
             let fetcher: std::rc::Rc<dyn obscura_octo::Fetcher> = std::rc::Rc::new(
-                obscura_octo::PageFetcher::hidden_chrome(global_proxy, args.user_agent.clone(), args.allow_private_network),
+                obscura_octo::PageFetcher::hidden_chrome_session(global_proxy, args.user_agent.clone(), args.allow_private_network, session),
             );
             obscura_octo::server::run(&host, port, ws_port, fetcher, token).await?;
         }
-        Some(Command::Monitor { url, selector, condition, on_change, interval, timeout, wait, max_runs, min_change_interval, save_to, serve, ws_port, token }) => {
+        Some(Command::Warmup { engine, minutes, session, query }) => {
+            run_warmup(engine, minutes, session, query, global_proxy, args.allow_private_network).await?;
+        }
+        Some(Command::Monitor { url, selector, condition, on_change, interval, timeout, wait, max_runs, min_change_interval, save_to, serve, ws_port, token, session }) => {
             let req = obscura_octo::MonitorRequest {
                 url,
                 selector,
@@ -639,11 +678,11 @@ async fn main() -> anyhow::Result<()> {
                 let (host, port) = parse_host_port(&addr)?;
                 let ws_port = ws_port.unwrap_or(port + 1);
                 let fetcher: std::rc::Rc<dyn obscura_octo::Fetcher> = std::rc::Rc::new(
-                    obscura_octo::PageFetcher::hidden_chrome(global_proxy, args.user_agent.clone(), args.allow_private_network),
+                    obscura_octo::PageFetcher::hidden_chrome_session(global_proxy, args.user_agent.clone(), args.allow_private_network, session),
                 );
                 obscura_octo::monitor_server::run(req, fetcher, host, port, ws_port, token).await?;
             } else {
-                let fetcher = obscura_octo::PageFetcher::hidden_chrome(global_proxy, None, args.allow_private_network);
+                let fetcher = obscura_octo::PageFetcher::hidden_chrome_session(global_proxy, None, args.allow_private_network, session);
                 let mut sink = NdjsonSink::new(save_to)?;
                 obscura_octo::run_monitor(&req, &fetcher, &mut sink, None).await;
             }
@@ -1683,6 +1722,53 @@ async fn run_octo_search(
     };
 
     write_or_print(rendered, output.as_ref()).await?;
+    Ok(())
+}
+
+/// Drive a real browsing session on `engine` for `minutes` and save it under
+/// `session` for later reuse. Prints live progress to stderr so a long warm-up
+/// is not a silent black box.
+async fn run_warmup(
+    engine: String,
+    minutes: f64,
+    session: std::path::PathBuf,
+    queries: Vec<String>,
+    proxy: Option<String>,
+    allow_private_network: bool,
+) -> anyhow::Result<()> {
+    let engine = parse_engine(&engine)?;
+    eprintln!(
+        "warmup: browsing {:?} for {:.0} min, saving session to {}",
+        engine,
+        minutes,
+        session.display()
+    );
+    let fetcher = obscura_octo::PageFetcher::hidden_chrome_session(
+        proxy,
+        None,
+        allow_private_network,
+        Some(session.clone()),
+    );
+    let mut progress = |elapsed: u64, total: u64, msg: &str| {
+        eprintln!("  [{elapsed:>4}/{total}s] {msg}");
+    };
+    let stats = obscura_octo::run_warmup(
+        engine,
+        minutes,
+        &queries,
+        &fetcher,
+        Some(&mut progress),
+    )
+    .await;
+    fetcher.save_session();
+    eprintln!(
+        "warmup done: {} queries, {} pages, {} errors in {}s. Reuse with --session {}",
+        stats.queries,
+        stats.pages,
+        stats.errors,
+        stats.elapsed_secs,
+        session.display()
+    );
     Ok(())
 }
 

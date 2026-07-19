@@ -168,6 +168,14 @@ impl PageFetcher {
             })
             .unwrap_or_default();
 
+        // Persist the jar after every successful navigation when a session is
+        // configured. Single-threaded (LocalSet), so no races; the write is a
+        // small JSON file. This makes --session behave identically on every
+        // surface (search, monitor, the servers) with no per-surface wiring.
+        if self.session_dir.is_some() {
+            self.context.save_cookies();
+        }
+
         Ok(FetchedPage {
             final_url: page.url_string(),
             html,
