@@ -158,8 +158,35 @@ obscura search "rust tokio" --depth page --scrape text --format ndjson -o result
 # Google captcha? Auto-fallback to DuckDuckGo
 obscura search "news" --engine google --fallback duckduckgo
 
+# Reuse a persistent, warm browser session (real cookies carry across runs)
+obscura search "rust jobs" --engine bing --session ~/.obscura/session
+
 # Expose search over HTTP (POST /search) and WebSocket
 obscura octo-serve --port 8080
+```
+
+When an engine serves a wall instead of results, the error names the **captcha
+type** (reCAPTCHA v2/v3, hCaptcha, Google "unusual traffic", Cloudflare, consent
+wall) and the **likely reason** it triggered (IP reputation, low behavioral
+score, request velocity, regional consent) with how to recover.
+
+### Warm sessions
+
+A persisted `--session DIR` keeps the browser's cookie jar between runs, so an
+engine sees a returning visitor with real history rather than a cold client — a
+legitimate trust signal that tends to raise anti-bot scores. Nothing is
+fabricated: it is the same jar Obscura builds while actually browsing.
+`--session` works on `search`, `monitor`, and `octo-serve`.
+
+```bash
+# Mature a session by really browsing an engine for 15 minutes, then save it
+obscura warmup --engine bing --minutes 15 --session ~/.obscura/session
+
+# Optionally seed with your own queries
+obscura warmup --engine duckduckgo --minutes 5 --session ./sess --query "rust jobs"
+
+# Then reuse it anywhere
+obscura search "..." --engine bing --session ~/.obscura/session
 ```
 
 ### Monitor pages for changes
@@ -388,6 +415,19 @@ Search a web engine and optionally scrape the results.
 | `--stealth` | off | Anti-detection mode |
 | `--concurrency` | `10` | Parallel page scrapes |
 | `--timeout` | `30` | Per-page timeout in seconds |
+| `--session` | — | Persist/reuse the browser cookie jar in this directory |
+
+### `obscura warmup`
+
+Mature a reusable browser session by really browsing an engine for a while.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--engine` | `bing` | `google`, `bing`, `duckduckgo` |
+| `--minutes` | `15` | How long to browse |
+| `--session` | — (required) | Directory to save the session (cookies) into |
+| `--query` | generic set | Seed query to browse (repeatable) |
+| `--proxy` | — | HTTP/SOCKS5 proxy URL |
 
 ### `obscura monitor <URL>`
 
@@ -403,6 +443,7 @@ Watch a page and emit changes as NDJSON (or serve over HTTP/WS).
 | `--min-change-interval` | — | Min seconds between emissions |
 | `--save-to` | — | Append each change as NDJSON to this file |
 | `--serve` | — | Serve changes over HTTP+WS at `host:port` |
+| `--session` | — | Persist/reuse the browser cookie jar in this directory |
 | `--proxy` | — | HTTP/SOCKS5 proxy URL |
 | `--stealth` | off | Anti-detection mode |
 
@@ -413,6 +454,8 @@ Expose search over HTTP and WebSocket.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port` | `8080` | HTTP/WS port |
+| `--token` | — | Bearer token required for non-loopback binds |
+| `--session` | — | Persist/reuse the browser cookie jar in this directory |
 | `--proxy` | — | HTTP/SOCKS5 proxy URL |
 | `--stealth` | off | Anti-detection mode |
 
