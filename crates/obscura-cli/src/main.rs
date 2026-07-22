@@ -512,6 +512,38 @@ fn merge_proxy(global_proxy: Option<String>, command_proxy: Option<String>) -> O
     command_proxy.or(global_proxy)
 }
 
+/// Resolve a proxy value of "auto" by downloading and testing proxy lists,
+/// returning the fastest working SOCKS5 proxy. Any other value is returned
+/// as-is. Prints progress to stderr.
+async fn resolve_auto_proxy(proxy: Option<String>) -> Option<String> {
+    match proxy.as_deref() {
+        Some("auto") | Some("Auto") | Some("AUTO") => {
+            eprintln!("obscura: auto-selecting best proxy...");
+            let start = std::time::Instant::now();
+            match obscura_net::select_best().await {
+                Some(url) => {
+                    let elapsed = start.elapsed();
+                    eprintln!(
+                        "obscura: selected proxy {} in {}.{:03}s",
+                        url,
+                        elapsed.as_secs(),
+                        elapsed.subsec_millis(),
+                    );
+                    Some(url)
+                }
+                None => {
+                    eprintln!(
+                        "obscura: warning: no working SOCKS5 proxy found — \
+                         running without proxy"
+                    );
+                    None
+                }
+            }
+        }
+        _ => proxy,
+    }
+}
+
 /// Normalize a raw `--v8-flags` value into the string we'll hand to V8.
 /// Returns `None` when the user didn't pass the flag, passed an empty string,
 /// or passed only whitespace; in those cases V8 is left untouched.
@@ -591,7 +623,7 @@ async fn main() -> anyhow::Result<()> {
         unsafe { std::env::set_var("OBSCURA_ALLOW_PRIVATE_NETWORK", "1"); }
     }
 
-    let global_proxy = args.proxy.clone();
+    let global_proxy = resolve_auto_proxy(args.proxy.clone()).await;
     // Obscura is a real, hidden Chrome: when built with the stealth feature the
     // real-browser identity (TLS impersonation + consistent fingerprint) is the
     // default for every command, not an opt-in. A non-stealth build is unchanged
@@ -603,8 +635,10 @@ async fn main() -> anyhow::Result<()> {
             // Fall back to OBSCURA_PROXY so a proxy can be supplied without
             // putting credentials on the command line. The multi-worker load
             // balancer passes the proxy to each worker this way (issue #366).
-            let proxy = merge_proxy(global_proxy.clone(), proxy)
-                .or_else(|| std::env::var("OBSCURA_PROXY").ok().filter(|s| !s.is_empty()));
+            let proxy = resolve_auto_proxy(
+                merge_proxy(global_proxy.clone(), proxy)
+                    .or_else(|| std::env::var("OBSCURA_PROXY").ok().filter(|s| !s.is_empty())),
+            ).await;
             print_banner(port);
             if let Some(ref dir) = storage_dir {
                 tracing::info!("Storage dir: {}", dir.display());
@@ -660,7 +694,7 @@ async fn main() -> anyhow::Result<()> {
             run_parallel_scrape(urls, eval, concurrency.get(), &format, timeout, quiet, global_proxy, stealth).await?;
         }
         Some(Command::Mcp { http, host, port, proxy, user_agent }) => {
-            let mcp_proxy = merge_proxy(global_proxy.clone(), proxy);
+            let mcp_proxy = resolve_auto_proxy(merge_proxy(global_proxy.clone(), proxy)).await;
             if http {
                 obscura_mcp::http::run(host, port, mcp_proxy, user_agent, stealth).await?;
             } else {
@@ -715,10 +749,10 @@ async fn main() -> anyhow::Result<()> {
         }
         None => {
             print_banner(args.port);
-            if let Some(ref proxy) = args.proxy {
+            if let Some(ref proxy) = global_proxy {
                 tracing::info!("Using proxy: {}", proxy);
             }
-            obscura_cdp::start_with_options(args.port, args.proxy, stealth).await?;
+            obscura_cdp::start_with_options(args.port, global_proxy, stealth).await?;
         }
     }
 

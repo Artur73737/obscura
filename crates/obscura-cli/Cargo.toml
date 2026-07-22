@@ -2,6 +2,9 @@
 name = "obscura-cli"
 version.workspace = true
 edition.workspace = true
+authors = ["Obscura Project"]
+description = "Obscura — the open-source headless browser for AI agents and web scraping"
+license = "Apache-2.0"
 
 [[bin]]
 name = "obscura"

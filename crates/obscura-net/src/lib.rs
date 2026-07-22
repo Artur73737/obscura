@@ -2,6 +2,7 @@ pub mod client;
 pub mod cookies;
 pub mod encoding;
 pub mod interceptor;
+pub mod proxy_list;
 pub mod robots;
 pub mod blocklist;
 #[cfg(feature = "stealth")]
@@ -19,6 +20,7 @@ pub use encoding::{
 };
 pub use robots::RobotsCache;
 pub use blocklist::is_blocked as is_tracker_blocked;
+pub use proxy_list::{select_best, fetch_and_test_all, ProxyEntry};
 #[cfg(feature = "stealth")]
 pub use wreq_client::{
     StealthHttpClient, STEALTH_NAVIGATOR_PLATFORM, STEALTH_UA_PLATFORM,
